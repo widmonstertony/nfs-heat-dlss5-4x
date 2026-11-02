@@ -1,0 +1,12 @@
+/build/
+/release/
+*.obj
+*.pdb
+*.log
+*.exp
+*.lib
+*.install.json
+nvngx_dlss.dll
+nvngx_dlssnr.dll
+nvngx_dlssg*.dll
+ReShade64.dll

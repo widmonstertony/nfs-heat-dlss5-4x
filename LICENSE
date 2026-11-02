@@ -1,0 +1,10 @@
+This repository is a multi-license aggregate.
+
+Patched OptiScaler: GPL-3.0, licenses/OptiScaler-GPL-3.0.txt.
+AIO add-on and caller bridge: Apache-2.0, licenses/AIO-Apache-2.0.txt and NOTICE.
+New Heat helper and installer scripts: MIT, licenses/Heat-MIT.txt.
+Feeder/MFG/ASI loader: their retained MIT licenses under licenses/.
+MinHook and NVIDIA Optical Flow interface headers: retained original notices.
+
+See THIRD_PARTY_NOTICES.md for component mappings. Proprietary NVIDIA
+runtime libraries, models and ReShade binaries are not part of this package.

@@ -1,0 +1,892 @@
+diff --git a/addon/build.bat b/addon/build.bat
+index ac3cae6..37dada8 100644
+--- a/addon/build.bat
++++ b/addon/build.bat
+@@ -2,6 +2,7 @@
+ setlocal
+ cd /d "%~dp0"
+ set "FEEDER_ROOT=%~dp0..\external\DLSS5-Feeder"
++set "MFG_NATIVE_ROOT=%~dp0..\..\stage-three-games\mfg-source\MFG-Unlocker-1.7.0\source\native"
+ call "%FEEDER_ROOT%\tools\vcvars.bat" x64 || exit /b 1
+ if not exist build mkdir build
+ if exist "build\DLSS5_Feed.fx" del /q "build\DLSS5_Feed.fx"
+@@ -18,12 +19,15 @@ cl /nologo /LD /EHsc /O2 /MD /W4 /std:c++20 ^
+   /I"%FEEDER_ROOT%\external\vulkan" ^
+   /I"%FEEDER_ROOT%\external\minhook\include" ^
+   /I"%~dp0include" ^
++  /I"%MFG_NATIVE_ROOT%" ^
+   /Fobuild\ /Fdbuild\standalone-dlssnr.pdb src\nr-standalone.cpp src\nvof-motion-provider.cpp ^
++  "%MFG_NATIVE_ROOT%\midpoint_fix.cpp" ^
++  "%MFG_NATIVE_ROOT%\dlssg_provider_policy.cpp" ^
+   "%FEEDER_ROOT%\external\minhook\src\buffer.c" ^
+   "%FEEDER_ROOT%\external\minhook\src\hook.c" ^
+   "%FEEDER_ROOT%\external\minhook\src\trampoline.c" ^
+   "%FEEDER_ROOT%\external\minhook\src\hde\hde64.c" ^
+-  /link /OUT:build\standalone-dlssnr.addon64 kernel32.lib user32.lib d3d9.lib d3d11.lib d3d12.lib dxgi.lib d3dcompiler.lib dcomp.lib
++  /link /OUT:build\standalone-dlssnr.addon64 kernel32.lib user32.lib d3d9.lib d3d11.lib d3d12.lib dxgi.lib d3dcompiler.lib dcomp.lib bcrypt.lib version.lib
+ if errorlevel 1 exit /b 1
+ 
+ for %%F in (nvngx_dlssnr.dll nvngx_dlss.dll nvngx_dlssg.dll) do (
+diff --git a/addon/src/nr-standalone.cpp b/addon/src/nr-standalone.cpp
+index 3e50fd5..20cdf34 100644
+--- a/addon/src/nr-standalone.cpp
++++ b/addon/src/nr-standalone.cpp
+@@ -35,6 +35,7 @@
+ #include "performance-telemetry.h"
+ #include "aio-menu-schema.hpp"
+ #include "nvof-motion-provider.hpp"
++#include "midpoint_fix.h"
+ 
+ #define ADDON_VERSION "2.2.4"
+ 
+@@ -219,7 +220,9 @@ static std::atomic<unsigned int> g_cpu_vort_submit_us{0};
+ static std::atomic<unsigned int> g_cpu_feed_submit_us{0};
+ static std::atomic<unsigned int> g_cpu_guide_flush_us{0};
+ static std::atomic<unsigned long long> g_guide_telemetry_samples{0};
+-static constexpr UINT kProxyTelemetryQueryCount = 4;
++static constexpr UINT kDlssgGeneratedFrameCount = 3;
++static constexpr UINT kProxyTelemetryQueryCount =
++    (kDlssgGeneratedFrameCount + 1) * 2;
+ static Microsoft::WRL::ComPtr<ID3D12QueryHeap> g_proxy_telemetry_query_heap;
+ static Microsoft::WRL::ComPtr<ID3D12Resource> g_proxy_telemetry_readback;
+ static UINT64 g_proxy_telemetry_frequency;
+@@ -604,7 +607,9 @@ static unsigned long long g_nvof_watchdog_saturated_sequence;
+ static bool g_nr_rejection_mask_enabled = false;
+ static float g_nr_rejection_mask_strength = 1.0f;
+ static bool g_nr_enabled = true;
+-static unsigned int g_nr_pass_count = 1;
++// Heat-specific build: the user explicitly selected persistent 2-pass NR.
++// Keep the upstream environment override so diagnostics can still request 1x/3x.
++static unsigned int g_nr_pass_count = 2;
+ static bool g_nr_second_pass_failed = false;
+ static bool g_nr_third_pass_failed = false;
+ static bool g_framegen_enabled = true;
+@@ -649,6 +654,15 @@ static Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> g_neural_list;
+ static bool g_async_compute_requested;
+ static bool g_async_compute_active;
+ static bool g_async_compute_restart_required;
++// Some hosts (notably Frostbite/Heat) serialize the split NGX queues in the
++// driver even though both queues report as asynchronous.  Keep the split
++// scheduler as the cross-game default, but allow a per-game profile to run
++// NR -> SR -> FG in one compute submission and avoid the cross-queue bubble.
++static bool g_phase_scheduled_fg_enabled = true;
++// Keep the conservative cross-queue serialization as the default.  A per-game
++// profile may disable only this admission gate while retaining split FG; this
++// is useful on hosts where the FG fence is cheap but its publication lags.
++static bool g_phase_schedule_serialization_enabled = true;
+ static Microsoft::WRL::ComPtr<ID3D12CommandQueue> g_async_compute_queue;
+ static Microsoft::WRL::ComPtr<ID3D12CommandQueue> g_async_fg_queue;
+ static Microsoft::WRL::ComPtr<ID3D12Fence> g_async_fg_fence;
+@@ -786,7 +800,8 @@ struct PresentationFrameSlot
+     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> fg_allocator;
+     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> fg_list;
+     Microsoft::WRL::ComPtr<ID3D12Resource> real_output;
+-    Microsoft::WRL::ComPtr<ID3D12Resource> generated_output;
++    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
++        kDlssgGeneratedFrameCount> generated_outputs;
+     Microsoft::WRL::ComPtr<ID3D12Resource> original_input;
+     Microsoft::WRL::ComPtr<ID3D12QueryHeap> fg_telemetry_query_heap;
+     Microsoft::WRL::ComPtr<ID3D12Resource> fg_telemetry_readback;
+@@ -797,6 +812,7 @@ struct PresentationFrameSlot
+     bool fg_telemetry_pending = false;
+     unsigned long long sequence = 0;
+     bool has_generated_frame = false;
++    UINT generated_frame_count = 0;
+     bool has_original_frame = false;
+     LARGE_INTEGER submitted_qpc = {};
+     LARGE_INTEGER ready_qpc = {};
+@@ -2056,7 +2072,23 @@ static void ConsumeProxyGpuTelemetry()
+     const D3D12_RANGE written_range = {0, 0};
+     g_proxy_telemetry_readback->Unmap(0, &written_range);
+     g_proxy_telemetry_pending = false;
+-    if (g_proxy_telemetry_present_count == 2)
++    if (g_proxy_telemetry_present_count == kDlssgGeneratedFrameCount + 1)
++    {
++        unsigned int generated_us = 0;
++        for (UINT index = 0; index < kDlssgGeneratedFrameCount; ++index)
++            generated_us += TimestampDeltaMicroseconds(values[index * 2],
++                values[index * 2 + 1], g_proxy_telemetry_frequency);
++        SmoothMicroseconds(g_gpu_proxy_generated_us, generated_us);
++        SmoothMicroseconds(g_gpu_proxy_real_us,
++            TimestampDeltaMicroseconds(values[kDlssgGeneratedFrameCount * 2],
++                values[kDlssgGeneratedFrameCount * 2 + 1],
++                g_proxy_telemetry_frequency));
++        SmoothMicroseconds(g_gpu_proxy_total_us,
++            TimestampDeltaMicroseconds(values[0],
++                values[kProxyTelemetryQueryCount - 1],
++                g_proxy_telemetry_frequency));
++    }
++    else if (g_proxy_telemetry_present_count == 2)
+     {
+         SmoothMicroseconds(g_gpu_proxy_generated_us,
+             TimestampDeltaMicroseconds(values[0], values[1], g_proxy_telemetry_frequency));
+@@ -2203,14 +2235,16 @@ static LONGLONG AsyncFgDeadlineIntervalQpc()
+     }
+ 
+     // An intermediate has at most one real-frame period to remain useful.
+-    // Two output refresh intervals approximate that period when FG targets 2x.
+-    // Clamp the grace period so very low-refresh displays do not accumulate
+-    // perceptible input latency and very high-refresh displays still give NGX
+-    // a practical chance to complete.
++    // Direct handoff publishes three intermediates plus the real frame, so its
++    // real-frame period is four output refresh intervals. The previous 2x
++    // assumption expired every 4x job after about 20 ms at 120 Hz, even though
++    // a correctly paced 4x real frame has a 33.3 ms budget. That produced a
++    // repeating generate/drop/reset cycle under two-pass NR load.
+     LONGLONG interval = g_proxy_pacing_interval_qpc > 0 ?
+-        g_proxy_pacing_interval_qpc * 2 : g_proxy_pacing_qpc_frequency / 60;
++        g_proxy_pacing_interval_qpc * (kDlssgGeneratedFrameCount + 1) :
++        g_proxy_pacing_qpc_frequency / 30;
+     const LONGLONG minimum = std::max<LONGLONG>(1, g_proxy_pacing_qpc_frequency * 8 / 1000);
+-    const LONGLONG maximum = std::max<LONGLONG>(minimum, g_proxy_pacing_qpc_frequency * 20 / 1000);
++    const LONGLONG maximum = std::max<LONGLONG>(minimum, g_proxy_pacing_qpc_frequency * 40 / 1000);
+     return std::clamp(interval, minimum, maximum);
+ }
+ 
+@@ -2235,7 +2269,8 @@ static bool PhaseScheduledFrameGenerationEnabled()
+     // any one capture transport. D3D11's mailbox was simply the first caller
+     // that could exercise it. Every API reaches this same D3D12 NGX queue after
+     // capture, so use the split FG phase whenever direct output handoff exists.
+-    return DirectOutputHandoffEnabled() && EffectiveFramegenEnabled() &&
++    return g_phase_scheduled_fg_enabled &&
++        DirectOutputHandoffEnabled() && EffectiveFramegenEnabled() &&
+         !g_framegen_failed && g_fg_feature != nullptr &&
+         g_async_fg_queue && g_async_fg_fence;
+ }
+@@ -2243,6 +2278,7 @@ static bool PhaseScheduledFrameGenerationEnabled()
+ static bool CommonPhaseScheduleAdmitsReconstruction()
+ {
+     if (!PhaseScheduledFrameGenerationEnabled()) return true;
++    if (!g_phase_schedule_serialization_enabled) return true;
+     if (AsyncFgGpuIdle())
+     {
+         g_async_fg_phase_released = true;
+@@ -2516,6 +2552,7 @@ static int AcquirePresentationFrameSlot()
+             slot.fg_telemetry_pending = false;
+             slot.sequence = 0;
+             slot.has_generated_frame = false;
++            slot.generated_frame_count = 0;
+             slot.has_original_frame = false;
+             slot.submitted_qpc = {};
+             slot.ready_qpc = {};
+@@ -2585,7 +2622,8 @@ static bool AdmitNewestFrameForFgPair()
+         g_fg_admission_frequency = frequency.QuadPart;
+     }
+     const LONGLONG interval = std::max<LONGLONG>(1,
+-        (g_fg_admission_frequency * 2 + g_proxy_refresh_hz / 2) /
++        (g_fg_admission_frequency * (kDlssgGeneratedFrameCount + 1) +
++            g_proxy_refresh_hz / 2) /
+             static_cast<LONGLONG>(g_proxy_refresh_hz));
+     if (g_fg_admission_next_qpc != 0 && now.QuadPart < g_fg_admission_next_qpc)
+     {
+@@ -2596,7 +2634,12 @@ static bool AdmitNewestFrameForFgPair()
+     // More output textures previously just made the serial NGX queue deeper.
+     // Keep only two unfinished evaluations while allowing completed frames to
+     // occupy the rest of the ring until their generated/real pair is shown.
+-    const UINT neural_limit = PhaseScheduledFrameGenerationEnabled() ?
++    // NGX NR/SR/FG is effectively serial on Heat even when submitted to an
++    // asynchronous queue.  With frame generation enabled, a second unfinished
++    // reconstruction only competes for cache and stretches both jobs.  Admit
++    // one newest source frame at a time; the larger limit remains useful for
++    // SR-only profiles where there is no generated/real presentation pair.
++    const UINT neural_limit = EffectiveFramegenEnabled() ?
+         kLatestFrameNeuralFramesInFlight : kMaxDirectNeuralFramesInFlight;
+     if (DirectNeuralFramesInFlight() >= neural_limit)
+     {
+@@ -2891,6 +2934,85 @@ static bool RuntimeFileExists(const wchar_t *path)
+         (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+ }
+ 
++// Load the private caller bridge below the Win32 LoadLibrary layer.  Proxy
++// upscalers commonly intercept every LoadLibrary("nvngx.dll") request and
++// return themselves, but the DLSS-NR snippet also validates that its caller's
++// real module filename contains "nvngx.dll".  Calling ntdll's loader directly
++// preserves that required identity without disabling the proxy globally.
++struct LdrUnicodeString
++{
++    USHORT Length;
++    USHORT MaximumLength;
++    PWSTR Buffer;
++};
++
++struct LdrAnsiString
++{
++    USHORT Length;
++    USHORT MaximumLength;
++    PCHAR Buffer;
++};
++
++using LdrLoadDllFn = LONG (NTAPI *)(PWSTR, PULONG, const LdrUnicodeString *, PHANDLE);
++using LdrGetProcedureAddressFn = LONG (NTAPI *)(HMODULE, const LdrAnsiString *, USHORT, PVOID *);
++
++static HMODULE LoadPrivateBridge(const wchar_t *path)
++{
++    if (path == nullptr || *path == L'\0') return nullptr;
++    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++    auto ldr_load_dll = ntdll != nullptr ?
++        reinterpret_cast<LdrLoadDllFn>(GetProcAddress(ntdll, "LdrLoadDll")) : nullptr;
++    if (ldr_load_dll == nullptr)
++    {
++        Log("private bridge loader unavailable: ntdll=%p error=%lu", ntdll, GetLastError());
++        return nullptr;
++    }
++
++    const size_t length = wcslen(path);
++    if (length > (USHRT_MAX / sizeof(wchar_t)) - 1) return nullptr;
++    LdrUnicodeString name = {
++        static_cast<USHORT>(length * sizeof(wchar_t)),
++        static_cast<USHORT>((length + 1) * sizeof(wchar_t)),
++        const_cast<PWSTR>(path)
++    };
++    HMODULE module = nullptr;
++    const LONG status = ldr_load_dll(nullptr, nullptr, &name, reinterpret_cast<PHANDLE>(&module));
++    wchar_t loaded_path[MAX_PATH] = {};
++    if (module != nullptr) GetModuleFileNameW(module, loaded_path, MAX_PATH);
++    Log("private bridge LdrLoadDll(%ls) -> %p status=0x%08lX loaded=%ls", path, module,
++        static_cast<unsigned long>(status), loaded_path);
++    return status >= 0 ? module : nullptr;
++}
++
++// Resolve exports below the Win32 GetProcAddress layer for the same reason
++// that LoadPrivateBridge uses LdrLoadDll: proxy upscalers may replace the
++// exports returned for nvngx.dll even when the real module was loaded.
++static FARPROC ResolvePrivateBridgeExport(HMODULE module, const char *name)
++{
++    if (module == nullptr || name == nullptr || *name == '\0') return nullptr;
++    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++    auto ldr_get_procedure_address = ntdll != nullptr ?
++        reinterpret_cast<LdrGetProcedureAddressFn>(GetProcAddress(ntdll, "LdrGetProcedureAddress")) : nullptr;
++    if (ldr_get_procedure_address == nullptr)
++    {
++        Log("private bridge resolver unavailable: ntdll=%p error=%lu", ntdll, GetLastError());
++        return nullptr;
++    }
++
++    const size_t length = strlen(name);
++    if (length > USHRT_MAX) return nullptr;
++    LdrAnsiString export_name = {
++        static_cast<USHORT>(length),
++        static_cast<USHORT>(length + 1),
++        const_cast<PCHAR>(name)
++    };
++    PVOID address = nullptr;
++    const LONG status = ldr_get_procedure_address(module, &export_name, 0, &address);
++    Log("private bridge LdrGetProcedureAddress(%s) -> %p status=0x%08lX", name, address,
++        static_cast<unsigned long>(status));
++    return status >= 0 ? reinterpret_cast<FARPROC>(address) : nullptr;
++}
++
+ static bool FindStandaloneRuntimeSet(wchar_t (&nr_path)[MAX_PATH],
+     wchar_t (&dlss_path)[MAX_PATH], wchar_t (&dlssg_path)[MAX_PATH],
+     wchar_t (&bridge_path)[MAX_PATH], bool &have_dlssg)
+@@ -2898,14 +3020,26 @@ static bool FindStandaloneRuntimeSet(wchar_t (&nr_path)[MAX_PATH],
+     for (const std::wstring &directory : RuntimeSearchDirectories())
+     {
+         wchar_t candidate_nr[MAX_PATH] = {}, candidate_dlss[MAX_PATH] = {};
+-        wchar_t candidate_dlssg[MAX_PATH] = {}, candidate_bridge[MAX_PATH] = {};
++        wchar_t candidate_dlssg[MAX_PATH] = {}, candidate_dlssg_private[MAX_PATH] = {};
++        wchar_t candidate_bridge[MAX_PATH] = {};
++        wchar_t candidate_legacy_bridge[MAX_PATH] = {};
+         BuildRuntimePath(candidate_nr, directory.c_str(), L"nvngx_dlssnr.dll");
+         BuildRuntimePath(candidate_dlss, directory.c_str(), L"nvngx_dlss.dll");
+         BuildRuntimePath(candidate_dlssg, directory.c_str(), L"nvngx_dlssg.dll");
+-        BuildRuntimePath(candidate_bridge, directory.c_str(), L"nvngx.dll");
++        BuildRuntimePath(candidate_dlssg_private, directory.c_str(),
++            L"nvngx_dlssg_standalone.dll");
++        // Prefer a unique basename that still ends in "nvngx.dll". The NGX
++        // snippets require that caller identity, while the unique prefix
++        // prevents the Windows loader from satisfying this request with an
++        // already loaded system/proxy nvngx.dll module.
++        BuildRuntimePath(candidate_bridge, directory.c_str(), L"dlss5_nvngx.dll");
++        BuildRuntimePath(candidate_legacy_bridge, directory.c_str(), L"nvngx.dll");
++        if (!RuntimeFileExists(candidate_bridge) && RuntimeFileExists(candidate_legacy_bridge))
++            wcscpy_s(candidate_bridge, candidate_legacy_bridge);
+         const bool nr = RuntimeFileExists(candidate_nr);
+         const bool dlss = RuntimeFileExists(candidate_dlss);
+-        const bool dlssg = RuntimeFileExists(candidate_dlssg);
++        const bool private_dlssg = RuntimeFileExists(candidate_dlssg_private);
++        const bool dlssg = private_dlssg || RuntimeFileExists(candidate_dlssg);
+         const bool bridge = RuntimeFileExists(candidate_bridge);
+         Log("runtime set candidate: %ls [NR=%s SR=%s FG=%s bridge=%s]",
+             directory.c_str(), nr ? "yes" : "no", dlss ? "yes" : "no",
+@@ -2917,7 +3051,8 @@ static bool FindStandaloneRuntimeSet(wchar_t (&nr_path)[MAX_PATH],
+         wcscpy_s(dlss_path, candidate_dlss);
+         wcscpy_s(bridge_path, candidate_bridge);
+         have_dlssg = dlssg;
+-        if (dlssg) wcscpy_s(dlssg_path, candidate_dlssg);
++        if (dlssg) wcscpy_s(dlssg_path,
++            private_dlssg ? candidate_dlssg_private : candidate_dlssg);
+         Log("selected coherent standalone runtime set: %ls", directory.c_str());
+         return true;
+     }
+@@ -2963,15 +3098,20 @@ static bool InitializeNgx()
+     g_nr_evaluate = g_nr_module ? reinterpret_cast<NgxEvaluateFeature>(GetProcAddress(g_nr_module, "NVSDK_NGX_D3D12_EvaluateFeature")) : nullptr;
+     g_nr_release = g_nr_module ? reinterpret_cast<NgxReleaseFeature>(GetProcAddress(g_nr_module, "NVSDK_NGX_D3D12_ReleaseFeature")) : nullptr;
+     g_nr_populate = g_nr_module ? reinterpret_cast<NgxPopulateParameters>(GetProcAddress(g_nr_module, "NVSDK_NGX_D3D12_PopulateParameters_Impl")) : nullptr;
+-    g_bridge_module = LoadLibraryExW(bridge_path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+-    auto bridge_init = g_bridge_module ? reinterpret_cast<NgxBridgeInitD3D12Ext>(GetProcAddress(g_bridge_module, "NVNGXBridge_D3D12_InitExt")) : nullptr;
+-    g_bridge_create = g_bridge_module ? reinterpret_cast<NgxBridgeCreateFeature>(GetProcAddress(g_bridge_module, "NVNGXBridge_D3D12_CreateFeature")) : nullptr;
+-    g_bridge_evaluate = g_bridge_module ? reinterpret_cast<NgxBridgeEvaluateFeature>(GetProcAddress(g_bridge_module, "NVNGXBridge_D3D12_EvaluateFeature")) : nullptr;
+-    g_bridge_release = g_bridge_module ? reinterpret_cast<NgxBridgeReleaseFeature>(GetProcAddress(g_bridge_module, "NVNGXBridge_D3D12_ReleaseFeature")) : nullptr;
+-    g_bridge_populate = g_bridge_module ? reinterpret_cast<NgxBridgePopulateParameters>(GetProcAddress(g_bridge_module, "NVNGXBridge_D3D12_PopulateParameters")) : nullptr;
++    g_bridge_module = LoadPrivateBridge(bridge_path);
++    auto bridge_init = g_bridge_module ? reinterpret_cast<NgxBridgeInitD3D12Ext>(ResolvePrivateBridgeExport(g_bridge_module, "NVNGXBridge_D3D12_InitExt")) : nullptr;
++    g_bridge_create = g_bridge_module ? reinterpret_cast<NgxBridgeCreateFeature>(ResolvePrivateBridgeExport(g_bridge_module, "NVNGXBridge_D3D12_CreateFeature")) : nullptr;
++    g_bridge_evaluate = g_bridge_module ? reinterpret_cast<NgxBridgeEvaluateFeature>(ResolvePrivateBridgeExport(g_bridge_module, "NVNGXBridge_D3D12_EvaluateFeature")) : nullptr;
++    g_bridge_release = g_bridge_module ? reinterpret_cast<NgxBridgeReleaseFeature>(ResolvePrivateBridgeExport(g_bridge_module, "NVNGXBridge_D3D12_ReleaseFeature")) : nullptr;
++    g_bridge_populate = g_bridge_module ? reinterpret_cast<NgxBridgePopulateParameters>(ResolvePrivateBridgeExport(g_bridge_module, "NVNGXBridge_D3D12_PopulateParameters")) : nullptr;
+     if (!nr_init || !g_nr_create || !g_nr_evaluate || !g_nr_release || !bridge_init ||
+         !g_nr_populate || !g_bridge_create || !g_bridge_evaluate || !g_bridge_release || !g_bridge_populate)
+     {
++        Log("NR/bridge export audit: nr_init=%p nr_create=%p nr_evaluate=%p nr_release=%p nr_populate=%p "
++            "bridge_module=%p bridge_init=%p bridge_create=%p bridge_evaluate=%p bridge_release=%p bridge_populate=%p path=%ls",
++            nr_init, g_nr_create, g_nr_evaluate, g_nr_release, g_nr_populate,
++            g_bridge_module, bridge_init, g_bridge_create, g_bridge_evaluate, g_bridge_release,
++            g_bridge_populate, bridge_path);
+         Fail("NR snippet/caller bridge exports", static_cast<unsigned int>(GetLastError()));
+         return false;
+     }
+@@ -3005,6 +3145,34 @@ static bool InitializeNgx()
+     if (NVSDK_NGX_FAILED(result)) { Fail("DLSS SR snippet Init_Ext", static_cast<unsigned int>(result)); return false; }
+ 
+     g_dlssg_module = have_dlssg ? LoadLibraryExW(dlssg_path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) : nullptr;
++    if (g_dlssg_module && wcsstr(dlssg_path, L"nvngx_dlssg_standalone.dll") != nullptr)
++    {
++        wchar_t gate_event_name[96] = {};
++        swprintf_s(gate_event_name, L"Local\\HeatMfgGateOnlyReady-%lu", GetCurrentProcessId());
++        HANDLE gate_event = CreateEventW(nullptr, TRUE, FALSE, gate_event_name);
++        const DWORD gate_wait = gate_event ? WaitForSingleObject(gate_event, 2000) : WAIT_FAILED;
++        Log("private DLSS-G provider gate handshake: wait=%lu ready=%u path=%ls",
++            gate_wait, gate_wait == WAIT_OBJECT_0 ? 1u : 0u, dlssg_path);
++        if (gate_event) CloseHandle(gate_event);
++
++        // Ada's provider accepts MultiFrameCount/Index only after the gate
++        // patch, but its stock temporal program still assumes the single
++        // midpoint used by 2x FG.  Publishing MFG-Unlocker's exact-profile
++        // midpoint program before the first FrameGeneration Create is required
++        // for complete 3x/4x output; without it, later generated surfaces can
++        // contain stale tiles even though EvaluateFeature reports success.
++        const bool midpoint_adapter = midpoint_fix::ObserveD3D12Device(
++            g_neural_device.Get());
++        const bool midpoint_ready = midpoint_adapter && midpoint_fix::PatchProvider(
++            g_dlssg_module, dlssg_path);
++        Log("private DLSS-G Ada midpoint publication: adapter=%u ready=%u path=%ls",
++            midpoint_adapter ? 1u : 0u, midpoint_ready ? 1u : 0u, dlssg_path);
++        if (!midpoint_ready)
++        {
++            Log("private DLSS-G 4x midpoint publication failed; disabling FG to avoid presenting incomplete generated surfaces");
++            g_framegen_failed = true;
++        }
++    }
+     auto dlssg_init = g_dlssg_module ? reinterpret_cast<NgxSnippetInitD3D12Ext>(GetProcAddress(g_dlssg_module, "NVSDK_NGX_D3D12_Init_Ext")) : nullptr;
+     g_fg_create = g_dlssg_module ? reinterpret_cast<NgxCreateFeature>(GetProcAddress(g_dlssg_module, "NVSDK_NGX_D3D12_CreateFeature")) : nullptr;
+     g_fg_evaluate = g_dlssg_module ? reinterpret_cast<NgxEvaluateFeature>(GetProcAddress(g_dlssg_module, "NVSDK_NGX_D3D12_EvaluateFeature")) : nullptr;
+@@ -4030,7 +4198,8 @@ static bool RetireResolutionDependentResources(UINT next_width, UINT next_height
+     }
+     for (PresentationFrameSlot &slot : g_presentation_slots)
+     {
+-        slot.generated_output.Reset();
++        for (auto &generated_output : slot.generated_outputs)
++            generated_output.Reset();
+         slot.real_output.Reset();
+         slot.original_input.Reset();
+         slot.state.store(PresentationSlotFree, std::memory_order_release);
+@@ -4040,6 +4209,7 @@ static bool RetireResolutionDependentResources(UINT next_width, UINT next_height
+         slot.fg_telemetry_pending = false;
+         slot.sequence = 0;
+         slot.has_generated_frame = false;
++        slot.generated_frame_count = 0;
+         slot.has_original_frame = false;
+         slot.submitted_qpc = {};
+         slot.ready_qpc = {};
+@@ -5280,7 +5450,8 @@ static bool EnsureStandaloneResources(UINT capture_width, UINT capture_height, D
+     for (PresentationFrameSlot &slot : g_presentation_slots)
+     {
+         slot.real_output.Reset();
+-        slot.generated_output.Reset();
++        for (auto &generated_output : slot.generated_outputs)
++            generated_output.Reset();
+         slot.original_input.Reset();
+         slot.fence_value = 0;
+         slot.neural_fence_value = 0;
+@@ -5288,6 +5459,7 @@ static bool EnsureStandaloneResources(UINT capture_width, UINT capture_height, D
+         slot.fg_telemetry_pending = false;
+         slot.sequence = 0;
+         slot.has_generated_frame = false;
++        slot.generated_frame_count = 0;
+         slot.has_original_frame = false;
+         slot.submitted_qpc = {};
+         slot.ready_qpc = {};
+@@ -5297,9 +5469,12 @@ static bool EnsureStandaloneResources(UINT capture_width, UINT capture_height, D
+         // destinations. They remain presentation-owned until the compositor's
+         // sampling fence retires them.
+         if (!CreateTexture(ow, oh, result_format, true, D3D12_RESOURCE_STATE_COMMON, slot.real_output) ||
+-            !CreateTexture(ow, oh, result_format, true, D3D12_RESOURCE_STATE_COMMON, slot.generated_output) ||
+             !CreateTexture(iw, ih, input_format, false, D3D12_RESOURCE_STATE_COMMON, slot.original_input))
+             return false;
++        for (auto &generated_output : slot.generated_outputs)
++            if (!CreateTexture(ow, oh, result_format, true,
++                    D3D12_RESOURCE_STATE_COMMON, generated_output))
++                return false;
+         if (g_async_fg_queue && (!slot.fg_telemetry_query_heap || !slot.fg_telemetry_readback) &&
+             !CreateTimestampResources(g_neural_device.Get(), 2,
+                 slot.fg_telemetry_query_heap, slot.fg_telemetry_readback))
+@@ -5432,7 +5607,8 @@ static void SetSrEvaluationContract(ID3D12Resource *color, ID3D12Resource *outpu
+ }
+ 
+ static void SetFgEvaluationContract(ID3D12Resource *real_output, ID3D12Resource *generated_output,
+-    ID3D12Resource *depth, ID3D12Resource *motion, bool reset)
++    ID3D12Resource *depth, ID3D12Resource *motion, bool reset,
++    UINT multi_frame_count, UINT multi_frame_index)
+ {
+     static float identity[4][4] = {
+         {1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}
+@@ -5444,7 +5620,8 @@ static void SetFgEvaluationContract(ID3D12Resource *real_output, ID3D12Resource
+     g_ngx_params->Set("DLSSG.Depth", depth);
+     g_ngx_params->Set("DLSSG.HUDLess", real_output);
+     g_ngx_params->Set("DLSSG.OutputInterpolated", generated_output);
+-    g_ngx_params->Set("DLSSG.MultiFrameCount", 1u); g_ngx_params->Set("DLSSG.MultiFrameIndex", 1u);
++    g_ngx_params->Set("DLSSG.MultiFrameCount", multi_frame_count);
++    g_ngx_params->Set("DLSSG.MultiFrameIndex", multi_frame_index);
+     for (const char *name : {"DLSSG.CameraViewToClip", "DLSSG.ClipToCameraView",
+         "DLSSG.ClipToLensClip", "DLSSG.ClipToPrevClip", "DLSSG.PrevClipToClip"})
+         g_ngx_params->Set(name, reinterpret_cast<void *>(identity));
+@@ -5538,6 +5715,17 @@ static void OnInitEffectRuntime(reshade::api::effect_runtime *runtime)
+             runtime_desc.texture.width, runtime_desc.texture.height);
+         return;
+     }
++    RECT runtime_client = {};
++    if (!GetClientRect(runtime_window, &runtime_client) ||
++        runtime_client.right - runtime_client.left <= 1 ||
++        runtime_client.bottom - runtime_client.top <= 1)
++    {
++        Log("ignored transient host ReShade runtime: hwnd=%p surface=%llux%u client=%ldx%ld",
++            runtime_window, runtime_desc.texture.width, runtime_desc.texture.height,
++            runtime_client.right - runtime_client.left,
++            runtime_client.bottom - runtime_client.top);
++        return;
++    }
+     if (g_game_window != nullptr && runtime_window != nullptr && runtime_window != g_game_window)
+     {
+         Log("ignored secondary ReShade runtime: hwnd=%p primary=%p", runtime_window, g_game_window);
+@@ -5628,6 +5816,12 @@ static void OnDestroyEffectRuntime(reshade::api::effect_runtime *runtime)
+         if (entry.rtv.handle) device->destroy_resource_view(entry.rtv);
+     g_backbuffer_views.clear();
+     g_runtime = nullptr; g_feed_technique = {}; g_motion_technique = {};
++    // A D3D11On12 bridge may destroy a temporary host runtime immediately
++    // before creating the real game swapchain on another HWND. Do not leave
++    // that stale HWND pinned as the primary or the real runtime is rejected as
++    // a secondary forever.
++    g_game_window = nullptr;
++    g_primary_swapchain_address = 0;
+     g_mv_variable = {}; g_depth_variable = {}; g_mask_variable = {}; g_nr_mask_variable = {};
+     g_nr_mask_strength_variable = {};
+     g_captured_motion.Reset(); g_captured_depth.Reset(); g_captured_mask.Reset(); g_captured_nr_mask.Reset();
+@@ -6175,13 +6369,15 @@ static bool CaptureVulkanInputToPipelineSlot(PipelineFrameSlot &slot)
+ }
+ 
+ static bool SubmitSplitFrameGeneration(PresentationFrameSlot &slot,
+-    ID3D12Resource *real_output, ID3D12Resource *generated_output,
++    ID3D12Resource *real_output,
+     ID3D12Resource *depth, ID3D12Resource *motion, bool reset,
+     UINT64 reconstruction_fence_value, NVSDK_NGX_Result &result)
+ {
+     if (!g_async_fg_queue || !g_async_fg_fence || !g_neural_fence ||
+-        !slot.fg_allocator || !slot.fg_list || !real_output || !generated_output)
++        !slot.fg_allocator || !slot.fg_list || !real_output)
+         return false;
++    for (const auto &generated_output : slot.generated_outputs)
++        if (!generated_output) return false;
+ 
+     ConsumeAsyncFgTelemetry(slot);
+     HRESULT hr = slot.fg_allocator->Reset();
+@@ -6199,34 +6395,41 @@ static bool SubmitSplitFrameGeneration(PresentationFrameSlot &slot,
+     if (telemetry)
+         slot.fg_list->EndQuery(slot.fg_telemetry_query_heap.Get(),
+             D3D12_QUERY_TYPE_TIMESTAMP, 0);
+-    D3D12_RESOURCE_BARRIER begin[2] = {
+-        Transition(real_output, D3D12_RESOURCE_STATE_COMMON,
+-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+-        Transition(generated_output, D3D12_RESOURCE_STATE_COMMON,
+-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+-    };
+-    slot.fg_list->ResourceBarrier(2, begin);
++    D3D12_RESOURCE_BARRIER begin[kDlssgGeneratedFrameCount + 1] = {};
++    begin[0] = Transition(real_output, D3D12_RESOURCE_STATE_COMMON,
++        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++    for (UINT index = 0; index < kDlssgGeneratedFrameCount; ++index)
++        begin[index + 1] = Transition(slot.generated_outputs[index].Get(),
++            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++    slot.fg_list->ResourceBarrier(kDlssgGeneratedFrameCount + 1, begin);
+ 
+-    SetFgEvaluationContract(real_output, generated_output, depth, motion, reset);
+     DWORD exception = 0;
+     g_active_neural_list = slot.fg_list.Get();
+-    result = SafeEvaluateFg(&exception);
++    for (UINT index = 0; index < kDlssgGeneratedFrameCount; ++index)
++    {
++        SetFgEvaluationContract(real_output, slot.generated_outputs[index].Get(),
++            depth, motion, reset, kDlssgGeneratedFrameCount, index + 1);
++        exception = 0;
++        result = SafeEvaluateFg(&exception);
++        if (exception || NVSDK_NGX_FAILED(result))
++            break;
++    }
+     g_active_neural_list = nullptr;
+     if (exception || NVSDK_NGX_FAILED(result))
+     {
+         slot.fg_list->Close();
+-        Log("split FG evaluation failed before submission: result=0x%08X exception=0x%08X",
++        Log("split 4x FG evaluation failed before submission: result=0x%08X exception=0x%08X",
+             static_cast<unsigned int>(result), exception);
+         return false;
+     }
+ 
+-    D3D12_RESOURCE_BARRIER end[2] = {
+-        Transition(real_output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+-            D3D12_RESOURCE_STATE_COMMON),
+-        Transition(generated_output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+-            D3D12_RESOURCE_STATE_COMMON)
+-    };
+-    slot.fg_list->ResourceBarrier(2, end);
++    D3D12_RESOURCE_BARRIER end[kDlssgGeneratedFrameCount + 1] = {};
++    end[0] = Transition(real_output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
++        D3D12_RESOURCE_STATE_COMMON);
++    for (UINT index = 0; index < kDlssgGeneratedFrameCount; ++index)
++        end[index + 1] = Transition(slot.generated_outputs[index].Get(),
++            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
++    slot.fg_list->ResourceBarrier(kDlssgGeneratedFrameCount + 1, end);
+     if (telemetry)
+     {
+         slot.fg_list->EndQuery(slot.fg_telemetry_query_heap.Get(),
+@@ -6481,7 +6684,7 @@ static bool ExecuteOnPresentPipeline(ID3D12Resource *backbuffer, int prepared_pi
+         }
+         PresentationFrameSlot &presentation = g_presentation_slots[direct_reservation.index];
+         real_output = presentation.real_output.Get();
+-        generated_output = presentation.generated_output.Get();
++        generated_output = presentation.generated_outputs[0].Get();
+         original_snapshot = presentation.original_input.Get();
+         if (!real_output || !generated_output || !original_snapshot)
+         {
+@@ -6822,7 +7025,7 @@ static bool ExecuteOnPresentPipeline(ID3D12Resource *backbuffer, int prepared_pi
+         };
+         commands->ResourceBarrier(2, fg_begin);
+         SetFgEvaluationContract(real_output, generated_output, depth, motion,
+-            reset || g_fg_frames.load() == 0);
++            reset || g_fg_frames.load() == 0, 1u, 1u);
+         exception = 0;
+         fg_result = SafeEvaluateFg(&exception);
+         if (exception)
+@@ -6921,7 +7124,7 @@ static bool ExecuteOnPresentPipeline(ID3D12Resource *backbuffer, int prepared_pi
+             g_presentation_slots[direct_reservation.index];
+         const bool fg_reset = reset || g_fg_frames.load() == 0 ||
+             g_async_fg_reset_required.exchange(false, std::memory_order_acq_rel);
+-        if (!SubmitSplitFrameGeneration(presentation, real_output, generated_output,
++        if (!SubmitSplitFrameGeneration(presentation, real_output,
+                 depth, motion, fg_reset,
+                 pipeline_slot.neural_fence_value, fg_result))
+         {
+@@ -6992,6 +7195,8 @@ static bool ExecuteOnPresentPipeline(ID3D12Resource *backbuffer, int prepared_pi
+             g_presentation_slots[pipeline_slot.presentation_slot_index];
+         presentation.sequence = source_sequence;
+         presentation.has_generated_frame = pipeline_slot.has_generated_frame;
++        presentation.generated_frame_count = pipeline_slot.has_generated_frame ?
++            kDlssgGeneratedFrameCount : 0u;
+         presentation.has_original_frame = true;
+     }
+     pipeline_slot.state.store(PipelineSlotReady, std::memory_order_release);
+@@ -7004,7 +7209,8 @@ static bool ExecuteOnPresentPipeline(ID3D12Resource *backbuffer, int prepared_pi
+     if (third_nr_succeeded) ++g_nr_third_frames;
+     const unsigned int completed_nr_passes = third_nr_succeeded ? 3u :
+         (second_nr_succeeded ? 2u : (evaluate_nr ? 1u : 0u));
+-    const char *fg_status = (!g_framegen_failed && g_fg_frames.load() > 1) ? "2x" : "warming/fallback";
++    const char *fg_status = (!g_framegen_failed && g_fg_frames.load() > 1) ?
++        (DirectOutputHandoffEnabled() ? "4x" : "2x") : "warming/fallback";
+     const char *guide_status = use_external_guides ? "same-frame motion" : "fallback";
+     if (evaluate_nr)
+         SetStatus("active on present: NR model %d (%u pass%s) + %s + FG %s (%s guides)",
+@@ -8940,10 +9146,14 @@ static unsigned int AdaptiveGovernorMaximumRealFps()
+ {
+     const unsigned int refresh = g_proxy_refresh_hz >= 24 ?
+         g_proxy_refresh_hz : 120;
+-    // FG presents one generated and one real output. There is no benefit in
+-    // asking the game for more real frames than half the display cadence.
++    // Match the real-frame budget to the active MFG multiplier. For 4x this
++    // is one real frame plus three generated frames, so a 120 Hz display
++    // needs 30 real frames rather than the old hard-coded 60 Hz budget.
++    const unsigned int output_frames_per_real =
++        std::max(1u, kDlssgGeneratedFrameCount + 1u);
+     return EffectiveFramegenEnabled() && !g_framegen_failed ?
+-        std::max(20u, refresh / 2) : std::max(30u, refresh);
++        std::max(20u, refresh / output_frames_per_real) :
++        std::max(30u, refresh);
+ }
+ 
+ static unsigned int AdaptiveGovernorCapacityTarget(
+@@ -9510,7 +9720,7 @@ static void RecordAddonCpuTime(const LARGE_INTEGER &begin)
+         Log("performance direct handoff: active=%u slots=%u neural_limit=%u submit->ready=%.3fms peak=%.3fms ready->present=%.3fms submit->present=%.3fms samples=%llu output_deferrals=%llu admission_deferrals=%llu inflight_deferrals=%llu capacity_deferrals=%llu target_real=%.1fHz",
+             DirectOutputHandoffEnabled() ? 1u : 0u,
+             kPresentationFrameSlotCount,
+-            PhaseScheduledFrameGenerationEnabled() ? kLatestFrameNeuralFramesInFlight :
++            EffectiveFramegenEnabled() ? kLatestFrameNeuralFramesInFlight :
+                 kMaxDirectNeuralFramesInFlight,
+             g_direct_submit_to_ready_us.load() / 1000.0f,
+             g_direct_submit_to_ready_peak_us.load() / 1000.0f,
+@@ -9519,7 +9729,9 @@ static void RecordAddonCpuTime(const LARGE_INTEGER &begin)
+             g_direct_handoff_samples.load(), g_direct_output_deferrals.load(),
+             g_fg_admission_deferrals.load(), g_fg_admission_inflight_deferrals.load(),
+             g_fg_admission_capacity_deferrals.load(),
+-            EffectiveFramegenEnabled() && g_show_neural_output ? g_proxy_refresh_hz * 0.5f : 0.0f);
++            EffectiveFramegenEnabled() && g_show_neural_output ?
++                static_cast<float>(g_proxy_refresh_hz) /
++                    static_cast<float>(kDlssgGeneratedFrameCount + 1) : 0.0f);
+         Log("performance capture mailbox: active=%u slots=%u submissions=%llu consumed=%llu stale_drops=%llu no_slot=%llu submit->GPU-ready=%.3fms peak=%.3fms capture->selected=%.3fms peak=%.3fms source_age=%u frames",
+             LegacyCaptureMailboxEnabled() ? 1u : 0u, kLegacyCaptureSlotCount,
+             g_capture_mailbox_submissions.load(), g_capture_mailbox_consumed.load(),
+@@ -10420,7 +10632,7 @@ static int StagePipelineFrameForPresentation(UINT pipeline_slot_index)
+     CopyEntry copies[3] = {
+         {pipeline.real_output.Get(), presentation.real_output.Get()},
+         {pipeline.original_input.Get(), presentation.original_input.Get()},
+-        {pipeline.generated_output.Get(), presentation.generated_output.Get()},
++        {pipeline.generated_output.Get(), presentation.generated_outputs[0].Get()},
+     };
+     const UINT copy_count = pipeline.has_generated_frame ? 3u : 2u;
+     D3D12_RESOURCE_BARRIER begin[6] = {};
+@@ -10465,6 +10677,7 @@ static int StagePipelineFrameForPresentation(UINT pipeline_slot_index)
+     presentation.fence_value = copy_fence;
+     presentation.sequence = pipeline.sequence;
+     presentation.has_generated_frame = pipeline.has_generated_frame;
++    presentation.generated_frame_count = pipeline.has_generated_frame ? 1u : 0u;
+     presentation.state.store(PresentationSlotReady, std::memory_order_release);
+ 
+     // The neural resources are no longer needed after this copy reaches the
+@@ -10478,8 +10691,8 @@ static int StagePipelineFrameForPresentation(UINT pipeline_slot_index)
+ }
+ 
+ static bool PresentProxySourcesOnWorker(ID3D12Resource *real_source,
+-    ID3D12Resource *generated_source, ID3D12Resource *original_source,
+-    bool has_generated_frame)
++    ID3D12Resource *const *generated_sources, UINT generated_source_count,
++    ID3D12Resource *original_source, bool has_generated_frame)
+ {
+     if (g_proxy_hidden || g_proxy_transition_hold || g_sr_frames.load() == 0 || real_source == nullptr ||
+         original_source == nullptr || g_proxy_swapchain == nullptr) return false;
+@@ -10488,21 +10701,33 @@ static bool PresentProxySourcesOnWorker(ID3D12Resource *real_source,
+     // snapshots contend with a generated/real pair that occupies virtually the
+     // entire refresh interval. The configured FG path resumes as soon as the
+     // overlay closes.
++    generated_source_count = std::min<UINT>(generated_source_count,
++        kDlssgGeneratedFrameCount);
++    bool generated_sources_ready = generated_source_count != 0;
++    for (UINT index = 0; index < generated_source_count; ++index)
++        generated_sources_ready = generated_sources_ready &&
++            generated_sources != nullptr && generated_sources[index] != nullptr;
+     const bool use_framegen = EffectiveFramegenEnabled() && !g_framegen_failed &&
+         !g_reshade_overlay_open.load(std::memory_order_acquire) &&
+         !g_proxy_overlay_open.load(std::memory_order_acquire) &&
+-        g_show_neural_output && has_generated_frame && generated_source != nullptr &&
++        g_show_neural_output && has_generated_frame && generated_sources_ready &&
+         g_fg_frames.load() >= 2;
+     const D3D12_RESOURCE_STATES original_base_state = D3D12_RESOURCE_STATE_COMMON;
+     const bool composite_post = !g_proxy_overlay_preview.load() &&
+         g_reshade_overlay_open.load() &&
+         g_post_reshade_color_ready.load(std::memory_order_acquire) && g_post_reshade_color;
+     ID3D12Resource *post_source = composite_post ? g_post_reshade_color.Get() : original_source;
+-    ID3D12Resource *present_sources[2] = {
+-        use_framegen ? generated_source : real_source,
+-        real_source
+-    };
+-    const UINT present_count = use_framegen ? 2u : 1u;
++    ID3D12Resource *present_sources[kDlssgGeneratedFrameCount + 1] = {};
++    UINT present_count = 1;
++    if (use_framegen)
++    {
++        for (UINT index = 0; index < generated_source_count; ++index)
++            present_sources[index] = generated_sources[index];
++        present_sources[generated_source_count] = real_source;
++        present_count = generated_source_count + 1;
++    }
++    else
++        present_sources[0] = real_source;
+     LARGE_INTEGER wait_begin = {}, wait_end = {};
+     // Command allocators, lists and descriptors are independently ringed. Do
+     // not wait for the previous compositor draw before recording the next one;
+@@ -10728,7 +10953,8 @@ static bool PresentProxySourcesOnWorker(ID3D12Resource *real_source,
+             return false;
+         }
+         accepted_by_swapchain = true;
+-        RecordAcceptedProxyPresent(use_framegen && present_index == 0);
++        RecordAcceptedProxyPresent(use_framegen &&
++            present_index < generated_source_count);
+         ++g_frames_presented;
+         UpdateOutputFps();
+     }
+@@ -10746,7 +10972,8 @@ static bool PresentProxySourcesOnWorker(ID3D12Resource *real_source,
+     if (post_frame == 1)
+         Log("post-ReShade native presentation active; effects and overlay are available to the proxy compositor");
+     if (use_framegen && post_frame == 2)
+-        Log("experimental DLSS-G presentation active: generated frame then real frame, uncapped flip cadence, tearing=%s",
++        Log("experimental DLSS-G presentation active: %u generated frames then real frame (%ux), uncapped flip cadence, tearing=%s",
++            generated_source_count, generated_source_count + 1,
+             g_proxy_allow_tearing ? "enabled" : "unavailable");
+     if (g_proxy_early_pending_activation && !g_proxy_failed)
+     {
+@@ -10773,8 +11000,10 @@ static bool PresentPipelineFrameOnWorker(UINT slot_index)
+         Log("proxy graphics queue failed to wait for async NGX output");
+         return false;
+     }
+-    return PresentProxySourcesOnWorker(slot.real_output.Get(), slot.generated_output.Get(),
+-        slot.original_input.Get(), slot.has_generated_frame);
++    ID3D12Resource *generated_sources[1] = {slot.generated_output.Get()};
++    return PresentProxySourcesOnWorker(slot.real_output.Get(), generated_sources,
++        slot.has_generated_frame ? 1u : 0u, slot.original_input.Get(),
++        slot.has_generated_frame);
+ }
+ 
+ static bool PresentStagedFrameOnWorker(UINT slot_index)
+@@ -10799,8 +11028,12 @@ static bool PresentStagedFrameOnWorker(UINT slot_index)
+         SmoothMicroseconds(g_direct_submit_to_present_us,
+             CounterDeltaMicroseconds(slot.submitted_qpc, present_begin));
+     }
++    ID3D12Resource *generated_sources[kDlssgGeneratedFrameCount] = {};
++    for (UINT index = 0; index < kDlssgGeneratedFrameCount; ++index)
++        generated_sources[index] = slot.generated_outputs[index].Get();
+     const bool presented = PresentProxySourcesOnWorker(slot.real_output.Get(),
+-        slot.generated_output.Get(), slot.original_input.Get(), slot.has_generated_frame);
++        generated_sources, slot.generated_frame_count, slot.original_input.Get(),
++        slot.has_generated_frame);
+     slot.fence_value = g_proxy_fence_value;
+     slot.state.store(PresentationSlotPresenting, std::memory_order_release);
+     return presented;
+@@ -11147,6 +11380,7 @@ static bool DispatchCompletedNvofMailboxFrame()
+ 
+ static bool HoldNeuralDispatcherForFgPhase()
+ {
++    if (!g_phase_schedule_serialization_enabled) return false;
+     if (AsyncFgGpuIdle())
+     {
+         g_async_fg_phase_released = true;
+@@ -11601,7 +11835,23 @@ static void OnPresent(reshade::api::command_queue *queue, reshade::api::swapchai
+         return;
+     }
+     if (g_game_window && present_window && present_window != g_game_window) return;
+-    if (!g_game_window && present_window) g_game_window = present_window;
++    if (!g_game_window && present_window)
++    {
++        RECT present_client = {};
++        if (!GetClientRect(present_window, &present_client) ||
++            present_client.right - present_client.left <= 1 ||
++            present_client.bottom - present_client.top <= 1)
++        {
++            const unsigned long long ignored = ++g_ignored_secondary_surfaces;
++            if (ignored <= 8)
++                Log("ignored transient host swapchain Present: hwnd=%p client=%ldx%ld",
++                    present_window,
++                    present_client.right - present_client.left,
++                    present_client.bottom - present_client.top);
++            return;
++        }
++        g_game_window = present_window;
++    }
+     g_primary_swapchain_address = swapchain->get_native();
+     // Declare this before the CPU timer so reverse destruction order publishes
+     // the just-completed CPU measurement rather than the previous frame's.
+@@ -12248,6 +12498,17 @@ static void OnInitSwapchain(reshade::api::swapchain *swapchain, bool)
+             Log("ignored helper swapchain: hwnd=%p surface=%ux%u", hwnd, width, height);
+         return;
+     }
++    RECT client = {};
++    if (!GetClientRect(hwnd, &client) ||
++        client.right - client.left <= 1 || client.bottom - client.top <= 1)
++    {
++        const unsigned long long ignored = ++g_ignored_secondary_surfaces;
++        if (ignored <= 8)
++            Log("ignored transient host swapchain: hwnd=%p surface=%ux%u client=%ldx%ld",
++                hwnd, width, height,
++                client.right - client.left, client.bottom - client.top);
++        return;
++    }
+     if (g_game_window != nullptr && hwnd != g_game_window && IsWindow(g_game_window))
+     {
+         const unsigned long long ignored = ++g_ignored_secondary_surfaces;
+@@ -12286,8 +12547,6 @@ static void OnInitSwapchain(reshade::api::swapchain *swapchain, bool)
+         if (g_proxy_window != nullptr)
+             PostMessageW(g_proxy_window, kProxyResizeToMonitorMessage, 0, 0);
+     }
+-    RECT client = {};
+-    GetClientRect(hwnd, &client);
+     const LONG client_width = client.right - client.left;
+     const LONG client_height = client.bottom - client.top;
+     if (g_composition_target_window.load() == hwnd && g_composition_device &&
+@@ -12936,7 +13195,7 @@ static void DrawOverlay(reshade::api::effect_runtime *)
+             g_stable_sr_history ? "per-frame reset with zero motion" : "experimental temporal VORT motion");
+     }
+     ImGui::TextDisabled("Off by default; enable only as a per-frame SR-history diagnostic.");
+-    if (ImGui::Checkbox(dlss5_aio_menu::Label("FrameGeneration", "Experimental DLSS Frame Generation (2x)"), &g_framegen_enabled))
++    if (ImGui::Checkbox(dlss5_aio_menu::Label("FrameGeneration", "Experimental DLSS Multi Frame Generation (4x direct / 2x fallback)"), &g_framegen_enabled))
+     {
+         reshade::set_config_value(nullptr, section, "FrameGeneration", g_framegen_enabled ? "1" : "0");
+         g_fg_frames = 0;
+@@ -13033,7 +13292,8 @@ static void DrawOverlay(reshade::api::effect_runtime *)
+         g_active_dlss_quality >= 0 ? DlssQualityName(g_active_dlss_quality) : "waiting",
+         DlssRenderPresetName(g_active_dlss_render_preset),
+         g_sr_frames.load(), g_fg_frames.load(),
+-        g_framegen_failed ? "failed/off" : (EffectiveFramegenEnabled() ? "2x" : "off"),
++        g_framegen_failed ? "failed/off" : (EffectiveFramegenEnabled() ?
++            (DirectOutputHandoffEnabled() ? "4x" : "2x") : "off"),
+         g_active_nr_model);
+     ImGui::Text("Contract: %ux%u -> %ux%u", g_input_width.load(), g_input_height.load(), g_output_width.load(), g_output_height.load());
+     const char *guide_status = g_using_nvof_guides ?
+@@ -13218,7 +13478,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+         char local[MAX_PATH] = {};
+         if (GetEnvironmentVariableA("LOCALAPPDATA", local, MAX_PATH) != 0)
+         {
+-            sprintf_s(g_log_path, "%s\\RHI\\Logs", local);
++            sprintf_s(g_log_path, "%s\\RHI", local);
++            CreateDirectoryA(g_log_path, nullptr);
++            strcat_s(g_log_path, "\\Logs");
+             CreateDirectoryA(g_log_path, nullptr);
+             strcat_s(g_log_path, "\\standalone-dlssnr.log");
+         }
+@@ -13287,9 +13549,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+         read_setting("NvidiaOpticalFlowSubmitDepth", "0", value, sizeof(value)); g_nvof_submit_depth = strcmp(value, "0") != 0;
+         read_setting("VortGuides", "0", value, sizeof(value)); g_vort_guides_enabled = strcmp(value, "0") != 0;
+         read_setting("NeuralRendering", "1", value, sizeof(value)); g_nr_enabled = strcmp(value, "0") != 0;
+-        // Multi-pass NR is deliberately session-only. Never inherit a risky
+-        // 2x/3x selection after a crash or normal restart.
+-        g_nr_pass_count = 1;
++        // Heat-specific build: persist the requested 2-pass NR across normal
++        // launches. The carrier environment override below remains available.
++        g_nr_pass_count = 2;
+         if (g_external_game_process_id != 0)
+         {
+             wchar_t external_pass_count[8] = {};
+@@ -13302,6 +13564,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+         g_nr_third_pass_failed = false;
+         read_setting("AsyncComputePipeline", "1", value, sizeof(value)); g_async_compute_requested = strcmp(value, "0") != 0;
+         read_setting("FrameGeneration", "1", value, sizeof(value)); g_framegen_enabled = strcmp(value, "0") != 0;
++        read_setting("PhaseScheduledFrameGeneration", "1", value, sizeof(value)); g_phase_scheduled_fg_enabled = strcmp(value, "0") != 0;
++        read_setting("PhaseScheduleSerialization", "1", value, sizeof(value)); g_phase_schedule_serialization_enabled = strcmp(value, "0") != 0;
+         read_setting("CompositeReshade", "1", value, sizeof(value)); g_composite_reshade_output = strcmp(value, "0") != 0;
+         read_setting("ShowProxyFps", "1", value, sizeof(value)); g_show_proxy_fps = strcmp(value, "0") != 0;
+         read_setting("AdaptivePressureGovernor", "1", value, sizeof(value)); g_adaptive_governor_enabled = strcmp(value, "0") != 0;
+@@ -13352,6 +13616,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+             g_nvof_motion_enabled ? "enabled" : "disabled",
+             NvofResolutionModeName(g_nvof_resolution_mode),
+             g_nvof_consistency_threshold, g_nvof_cost_threshold);
++        Log("frame-generation scheduling: %s, reconstruction gate=%s",
++            g_phase_scheduled_fg_enabled ? "split NGX queues" : "inline NR -> SR -> FG compute submission",
++            g_phase_schedule_serialization_enabled ? "serialized behind FG" : "nonblocking");
+         if (g_startup_recovery_detected)
+             Log("previous game session did not shut down cleanly; preserving configured presentation mode (automatic serialized recovery disabled): state=%s",
+                 g_startup_recovery_path[0] != '\0' ? g_startup_recovery_path : "marker unavailable");
+@@ -13486,7 +13753,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
+         }
+         for (PresentationFrameSlot &slot : g_presentation_slots)
+         {
+-            slot.generated_output.Reset();
++            for (auto &generated_output : slot.generated_outputs)
++                generated_output.Reset();
+             slot.real_output.Reset();
+             slot.original_input.Reset();
+             slot.fg_telemetry_readback.Reset();

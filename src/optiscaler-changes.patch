@@ -1,0 +1,398 @@
+diff --git a/OptiScaler/OptiScaler.vcxproj b/OptiScaler/OptiScaler.vcxproj
+index e55161a..2544d2e 100644
+--- a/OptiScaler/OptiScaler.vcxproj
++++ b/OptiScaler/OptiScaler.vcxproj
+@@ -114,10 +114,11 @@
+       <ConformanceMode>true</ConformanceMode>
+       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+       <FloatingPointModel>Fast</FloatingPointModel>
+-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
++      <MultiProcessorCompilation>false</MultiProcessorCompilation>
+       <LanguageStandard>stdcpplatest</LanguageStandard>
+       <PrecompiledHeader>Use</PrecompiledHeader>
+       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
++      <DebugInformationFormat>OldStyle</DebugInformationFormat>
+       <AdditionalOptions>/w34996 %(AdditionalOptions)</AdditionalOptions>
+     </ClCompile>
+     <Link>
+@@ -156,7 +157,7 @@ copy "$(SolutionDir)external\directx_agility_sdk\LICENSE.txt" $(SolutionDir)x64\
+ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y</Command>
+     </PostBuildEvent>
+     <PreBuildEvent>
+-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git -C '$(SolutionDir)' rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
++      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $solutionDir = '$(SolutionDir)'.TrimEnd('\'); $commit = (git -C $solutionDir rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
+     </PreBuildEvent>
+   </ItemDefinitionGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">
+@@ -188,7 +189,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
+       <Command>powershell -Command "$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'; $fileName = '$(OutDir)OptiScaler_' + $timestamp + '.7z'; $backupFileName = '$(OutDir)OptiScaler_' + $timestamp + '_Backup.7z'; &amp; '7z.exe' a -t7z $fileName '$(TargetPath)'; &amp; '7z.exe' a -t7z $backupFileName '$(OutDir)$(TargetName).*'"</Command>
+     </PostBuildEvent>
+     <PreBuildEvent>
+-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git -C '$(SolutionDir)' rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
++      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $solutionDir = '$(SolutionDir)'.TrimEnd('\'); $commit = (git -C $solutionDir rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
+     </PreBuildEvent>
+   </ItemDefinitionGroup>
+   <ItemGroup>
+@@ -856,4 +857,4 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
+\ No newline at end of file
++</Project>
+diff --git a/OptiScaler/hooks/DxgiFactory_Hooks.cpp b/OptiScaler/hooks/DxgiFactory_Hooks.cpp
+index 1227c70..a29a7d3 100644
+--- a/OptiScaler/hooks/DxgiFactory_Hooks.cpp
++++ b/OptiScaler/hooks/DxgiFactory_Hooks.cpp
+@@ -753,6 +753,17 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
+ {
+     *ppSwapChain = nullptr;
+ 
++    const bool auxiliaryNvPresent = IsNvPresentAuxiliaryWindow(hWnd);
++    std::optional<ScopedSkipFGSCCreation> hiddenSwapchainGuard;
++    LOG_INFO("Hooked CreateSwapChainForHwnd entry: hwnd {:X}, helperHwnd {:X}, hidden {}, skip {}", (size_t) hWnd,
++             (size_t) g_hiddenSwapchainWindow, IsHiddenSwapchainWindow(hWnd), _skipFGSwapChainCreation);
++    if (IsHiddenSwapchainWindow(hWnd) || auxiliaryNvPresent)
++    {
++        LOG_INFO("Auxiliary DX11 HWND {:X}; bypassing hooked frame-generation swapchain creation",
++                 (size_t) hWnd);
++        hiddenSwapchainGuard.emplace();
++    }
++
+     static bool firstCall = static_cast<bool>(State::Instance().gameQuirks & GameQuirk::NoFSRFGFirstSwapchain);
+     if (firstCall)
+     {
+@@ -996,6 +1007,23 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
+                             fgSwapChainIsRealFG = fgScResult == S_OK && fgSwapChain1 != nullptr;
+                         }
+ 
++                        // The Streamline factory may re-enter this hook and finish the interop wrapper
++                        // while the outer call is still inside FGHooks. If that happened, the outer
++                        // call must return the completed wrapper instead of constructing a second one.
++                        if (State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
++                            State::Instance().currentWrappedSwapchain != nullptr &&
++                            State::Instance().currentSwapchainDesc.OutputWindow == hWnd)
++                        {
++                            LOG_INFO("Inner factory call completed Dx11wDx12SC; reusing it for outer HWND request");
++                            SAFE_RELEASE(realDx11SwapChain1);
++                            SAFE_RELEASE(fgSwapChain1);
++
++                            const auto reuseResult =
++                                State::Instance().currentWrappedSwapchain->QueryInterface(IID_PPV_ARGS(ppSwapChain));
++                            device->Release();
++                            return reuseResult;
++                        }
++
+                         if (fgScResult != S_OK || fgSwapChain1 == nullptr)
+                         {
+                             fgSwapChainIsRealFG = false;
+@@ -1098,6 +1126,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
+             State::Instance().skipDxgiLoadChecks = false;
+         }
+ 
++        if (auxiliaryNvPresent)
++            return result;
++
+         if (result == S_OK)
+         {
+             State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+@@ -1554,6 +1585,16 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
+ {
+     *ppSwapChain = nullptr;
+ 
++    const bool auxiliaryNvPresent = IsNvPresentAuxiliaryWindow(hWnd);
++    std::optional<ScopedSkipFGSCCreation> hiddenSwapchainGuard;
++    LOG_INFO("DLSSG CreateSwapChainForHwnd entry: hwnd {:X}, helperHwnd {:X}, hidden {}, skip {}", (size_t) hWnd,
++             (size_t) g_hiddenSwapchainWindow, IsHiddenSwapchainWindow(hWnd), _skipFGSwapChainCreation);
++    if (IsHiddenSwapchainWindow(hWnd) || auxiliaryNvPresent)
++    {
++        LOG_INFO("Auxiliary DX11 HWND {:X}; bypassing Streamline DLSSG swapchain creation", (size_t) hWnd);
++        hiddenSwapchainGuard.emplace();
++    }
++
+     static bool firstCall = static_cast<bool>(State::Instance().gameQuirks & GameQuirk::NoFSRFGFirstSwapchain);
+     if (firstCall)
+     {
+@@ -1813,6 +1854,9 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
+             State::Instance().skipDxgiLoadChecks = false;
+         }
+ 
++        if (auxiliaryNvPresent)
++            return result;
++
+         if (result == S_OK)
+         {
+             // check for SL proxy
+diff --git a/OptiScaler/hooks/DxgiFactory_Hooks.h b/OptiScaler/hooks/DxgiFactory_Hooks.h
+index b67def3..ad41600 100644
+--- a/OptiScaler/hooks/DxgiFactory_Hooks.h
++++ b/OptiScaler/hooks/DxgiFactory_Hooks.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include "SysUtils.h"
+ #include "FG_Hooks.h"
++#include "DxgiFactory_SkipState.h"
+ #include <dxgi1_6.h>
+ 
+ #include "Hook_Utils.h"
+@@ -73,7 +74,7 @@ class DxgiFactoryHooks
+     VALIDATE_MEMBER_HOOK(EnumAdapterByGpuPreference, PFN_EnumAdapterByGpuPreference)
+ 
+     // To prevent recursive FG swapchain creation
+-    inline static bool _skipFGSwapChainCreation = false;
++    inline static bool& _skipFGSwapChainCreation = DxgiFactorySkipState::skipFGSwapChainCreation;
+ 
+     class ScopedSkipFGSCCreation
+     {
+diff --git a/OptiScaler/hooks/DxgiFactory_WrappedCalls.cpp b/OptiScaler/hooks/DxgiFactory_WrappedCalls.cpp
+index 620960d..31f6a2a 100644
+--- a/OptiScaler/hooks/DxgiFactory_WrappedCalls.cpp
++++ b/OptiScaler/hooks/DxgiFactory_WrappedCalls.cpp
+@@ -261,6 +261,11 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
+                     IDXGISwapChain* realDx11SwapChain = nullptr;
+                     HRESULT realScResult = E_FAIL;
+                     {
++                        // The hidden DX11 backbuffer must never recurse into the
++                        // DX11->DX12 frame-generation bridge. Factory proxies
++                        // (notably Streamline) can route this internal call back
++                        // through this wrapper even when parent wrapping is skipped.
++                        ScopedSkipFGSCCreation skipFGSCCreation {};
+                         ScopedSkipParentWrapping skipParentWrapping {};
+                         realScResult = realFactory->CreateSwapChain(pDevice, &realDesc, &realDx11SwapChain);
+                     }
+@@ -312,7 +317,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
+                         State::Instance().currentSwapchain = *ppSwapChain;
+                         State::Instance().currentWrappedSwapchain = *ppSwapChain;
+ 
+-                        LOG_INFO("Created Dx11wDx12SC: wrapper {:X}, real11 {:X}, fg12 {:X}", (size_t) *ppSwapChain,
++                        LOG_INFO("Created Dx11wDx12SC: hwnd {:X}, wrapper {:X}, real11 {:X}, fg12 {:X}",
++                                 (size_t) localDesc.OutputWindow, (size_t) *ppSwapChain,
+                                  (size_t) realDx11SwapChain, (size_t) fgSwapChain4);
+ 
+                         realDx11SwapChain->Release();
+@@ -429,6 +435,61 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
+ {
+     *ppSwapChain = nullptr;
+ 
++    const bool auxiliaryNvPresent = IsNvPresentAuxiliaryWindow(hWnd);
++
++    // Keep the native DXGI entry point from the first game-window call. Streamline
++    // patches this factory's vtable later while DLSSG is initialized. NvPresent
++    // subsequently asks the same factory for its own invisible helper chain; routing
++    // that request through Streamline makes it treat the helper as a second DLSSG
++    // presentation chain and tears down the real game chain. Calling the saved native
++    // method directly creates the helper's ordinary DX11 chain without entering either
++    // Streamline's swap-chain hook or OptiScaler's FG path.
++    using NativeCreateSwapChainForHwnd = HRESULT(STDMETHODCALLTYPE*)(
++        IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
++        const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
++    static NativeCreateSwapChainForHwnd nativeCreateSwapChainForHwnd = nullptr;
++    static IDXGIFactory2* nativeFactoryForAuxiliary = nullptr;
++
++    if (!auxiliaryNvPresent && nativeCreateSwapChainForHwnd == nullptr && realFactory != nullptr)
++    {
++        auto** factoryVTable = *reinterpret_cast<void***>(realFactory);
++        nativeCreateSwapChainForHwnd = reinterpret_cast<NativeCreateSwapChainForHwnd>(factoryVTable[15]);
++        nativeFactoryForAuxiliary = realFactory;
++        nativeFactoryForAuxiliary->AddRef();
++        LOG_INFO("Captured native CreateSwapChainForHwnd entry {:X} with factory {:X}",
++                 (size_t) nativeCreateSwapChainForHwnd, (size_t) nativeFactoryForAuxiliary);
++    }
++
++    if (auxiliaryNvPresent && nativeCreateSwapChainForHwnd != nullptr && nativeFactoryForAuxiliary != nullptr)
++    {
++        LOG_INFO("NvPresent auxiliary HWND {:X}; calling saved native DXGI entry {:X} on factory {:X}",
++                 (size_t) hWnd, (size_t) nativeCreateSwapChainForHwnd, (size_t) nativeFactoryForAuxiliary);
++        const auto nativeResult = nativeCreateSwapChainForHwnd(nativeFactoryForAuxiliary, pDevice, hWnd, pDesc,
++                                                                pFullscreenDesc, pRestrictToOutput, ppSwapChain);
++        LOG_INFO("NvPresent native swapchain result: {:X}, swapchain {:X}", (UINT) nativeResult,
++                 (size_t) (ppSwapChain != nullptr ? *ppSwapChain : nullptr));
++        return nativeResult;
++    }
++
++    std::optional<ScopedSkipFGSCCreation> hiddenSwapchainGuard;
++    wchar_t windowClass[128] = {};
++    wchar_t windowTitle[256] = {};
++    DWORD windowPid = 0;
++    GetClassNameW(hWnd, windowClass, ARRAYSIZE(windowClass));
++    GetWindowTextW(hWnd, windowTitle, ARRAYSIZE(windowTitle));
++    GetWindowThreadProcessId(hWnd, &windowPid);
++    LOG_INFO(
++        "CreateSwapChainForHwnd entry: hwnd {:X}, processHwnd {:X}, helperHwnd {:X}, class '{}', title '{}', pid {}, parent {:X}, visible {}, hidden {}, skip {}, caller {}",
++        (size_t) hWnd, (size_t) Util::GetProcessWindow(), (size_t) g_hiddenSwapchainWindow,
++        wstring_to_string(windowClass), wstring_to_string(windowTitle), windowPid, (size_t) GetParent(hWnd),
++        IsWindowVisible(hWnd) != FALSE, IsHiddenSwapchainWindow(hWnd), _skipFGSwapChainCreation,
++        Util::WhoIsTheCaller(_ReturnAddress()));
++    if (IsHiddenSwapchainWindow(hWnd) || auxiliaryNvPresent)
++    {
++        LOG_INFO("Auxiliary DX11 HWND {:X}; bypassing frame-generation swapchain creation", (size_t) hWnd);
++        hiddenSwapchainGuard.emplace();
++    }
++
+     DXGI_SWAP_CHAIN_DESC1 localDesc = {};
+ 
+     if (pDesc != nullptr)
+@@ -631,6 +692,7 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
+             if (!_skipFGSwapChainCreation && ShouldCreateDx11wDx12Swapchain())
+             {
+                 auto hiddenHwnd = CreateHiddenSwapchainWindow();
++                LOG_INFO("DX11 bridge hidden HWND: {:X}", (size_t) hiddenHwnd);
+ 
+                 ID3D12Device* dx12Device = nullptr;
+                 ID3D12CommandQueue* dx12Queue = nullptr;
+@@ -647,6 +709,11 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
+                     IDXGISwapChain1* realDx11SwapChain1 = nullptr;
+                     HRESULT realScResult = E_FAIL;
+                     {
++                        // Streamline may re-enter this wrapper while we create the
++                        // bridge's hidden DX11 swapchain. Keep that internal chain
++                        // on the plain DX11 path so only the game's visible HWND
++                        // owns a DLSSG swapchain.
++                        ScopedSkipFGSCCreation skipFGSCCreation {};
+                         ScopedSkipParentWrapping skipParentWrapping {};
+                         realScResult = realFactory->CreateSwapChainForHwnd(pDevice, hiddenHwnd, &realDesc, nullptr,
+                                                                            pRestrictToOutput, &realDx11SwapChain1);
+@@ -669,6 +736,23 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
+                             fgSwapChainIsRealFG = SUCCEEDED(fgScResult) && fgSwapChain1 != nullptr;
+                         }
+ 
++                        // A nested Streamline factory call can finish the wrapper before this
++                        // outer layer resumes. Return that single owner and drop the temporary
++                        // outer resources instead of creating a second DLSSG swap chain.
++                        if (State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
++                            State::Instance().currentWrappedSwapchain != nullptr &&
++                            State::Instance().currentSwapchainDesc.OutputWindow == hWnd)
++                        {
++                            LOG_INFO("Inner factory call completed Dx11wDx12SC; reusing it for outer HWND request");
++                            SAFE_RELEASE(realDx11SwapChain1);
++                            SAFE_RELEASE(fgSwapChain1);
++
++                            const auto reuseResult =
++                                State::Instance().currentWrappedSwapchain->QueryInterface(IID_PPV_ARGS(ppSwapChain));
++                            device->Release();
++                            return reuseResult;
++                        }
++
+                         if (FAILED(fgScResult) || fgSwapChain1 == nullptr)
+                         {
+                             fgSwapChainIsRealFG = false;
+@@ -767,6 +851,11 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
+             State::Instance().skipDxgiLoadChecks = false;
+         }
+ 
++        // NvPresent owns this invisible helper window. Return its plain chain
++        // without replacing the visible game's DLSSG state.
++        if (auxiliaryNvPresent)
++            return result;
++
+         if (result == S_OK)
+         {
+             State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+diff --git a/OptiScaler/hooks/DxgiFactory_WrappedCalls.h b/OptiScaler/hooks/DxgiFactory_WrappedCalls.h
+index 5c253b3..54aeb14 100644
+--- a/OptiScaler/hooks/DxgiFactory_WrappedCalls.h
++++ b/OptiScaler/hooks/DxgiFactory_WrappedCalls.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "SysUtils.h"
++#include "DxgiFactory_SkipState.h"
+ #include <wrapped/wrapped_factory.h>
+ #include <dxgi1_6.h>
+ 
+@@ -26,7 +27,7 @@ class DxgiFactoryWrappedCalls
+ 
+   private:
+     // To prevent recursive FG swapchain creation
+-    inline static bool _skipFGSwapChainCreation = false;
++    inline static bool& _skipFGSwapChainCreation = DxgiFactorySkipState::skipFGSwapChainCreation;
+ 
+     class ScopedSkipFGSCCreation
+     {
+diff --git a/OptiScaler/hooks/LibraryLoad_Hooks.cpp b/OptiScaler/hooks/LibraryLoad_Hooks.cpp
+index 10f5d57..9ae099f 100644
+--- a/OptiScaler/hooks/LibraryLoad_Hooks.cpp
++++ b/OptiScaler/hooks/LibraryLoad_Hooks.cpp
+@@ -54,6 +54,20 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
+     auto path = std::filesystem::path(libName).lexically_normal();
+     auto normalizedPath = path.wstring();
+     to_lower_in_place(normalizedPath);
++    auto normalizedFilename = path.filename().wstring();
++    to_lower_in_place(normalizedFilename);
++
++    // The standalone DLSS5 pipeline uses a tiny private caller-identity bridge
++    // whose basename intentionally ends in "nvngx.dll". It must be loaded as
++    // its own module so the NGX snippets see the expected caller identity.
++    // Treating it as the game's generic nvngx proxy redirects the load back to
++    // OptiScaler itself and leaves every NVNGXBridge_* export unresolved.
++    const bool isStandaloneDlss5Bridge = normalizedFilename == L"dlss5_nvngx.dll";
++    // The same standalone pipeline explicitly resolves NVIDIA's installed NGX
++    // core from DriverStore. This is not the game's nvngx proxy request and
++    // must retain the real driver module handle.
++    const bool isExplicitDriverStoreNgxCore =
++        normalizedFilename == L"_nvngx.dll" && normalizedPath.contains(L"\\driverstore\\");
+ 
+     std::filesystem::path localSlPath(Config::Instance()->MainDllPath.value());
+     localSlPath = localSlPath / L"streamline"; // Hardcoded streamline folder
+@@ -69,7 +83,9 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
+ 
+     auto pos = libName.rfind(exePath);
+ 
+-    if (Config::Instance()->EnableDlssInputs.value_or_default() && CheckDllNameW(&libName, &nvngxNamesW) &&
++    if (!isStandaloneDlss5Bridge && !isExplicitDriverStoreNgxCore &&
++        Config::Instance()->EnableDlssInputs.value_or_default() &&
++        CheckDllNameW(&libName, &nvngxNamesW) &&
+         (!Config::Instance()->HookOriginalNvngxOnly.value_or_default() || pos == std::string::npos))
+     {
+         LOG_INFO("nvngx call: {0}, returning this dll!", libNameA);
+diff --git a/OptiScaler/misc/HiddenWindow.h b/OptiScaler/misc/HiddenWindow.h
+index 40a4544..6441dbd 100644
+--- a/OptiScaler/misc/HiddenWindow.h
++++ b/OptiScaler/misc/HiddenWindow.h
+@@ -2,8 +2,31 @@
+ #include <windows.h>
+ #include <stdexcept>
+ 
+-inline static HWND g_hiddenSwapchainWindow = nullptr;
+-inline static constexpr wchar_t kHiddenSwapchainWindowClass[] = L"OptiDx11SwapchainHost";
++inline HWND g_hiddenSwapchainWindow = nullptr;
++inline constexpr wchar_t kHiddenSwapchainWindowClass[] = L"OptiDx11SwapchainHost";
++
++inline bool IsHiddenSwapchainWindow(HWND hwnd)
++{
++    if (hwnd == nullptr)
++        return false;
++
++    if (hwnd == g_hiddenSwapchainWindow)
++        return true;
++
++    wchar_t className[64] = {};
++    return GetClassNameW(hwnd, className, ARRAYSIZE(className)) > 0 &&
++           wcscmp(className, kHiddenSwapchainWindowClass) == 0;
++}
++
++inline bool IsNvPresentAuxiliaryWindow(HWND hwnd)
++{
++    if (hwnd == nullptr)
++        return false;
++
++    wchar_t className[64] = {};
++    return GetClassNameW(hwnd, className, ARRAYSIZE(className)) > 0 &&
++           wcscmp(className, L"InvisibleWindowClassNvPresent") == 0;
++}
+ 
+ inline static LRESULT CALLBACK HiddenSwapchainWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+ {
+@@ -27,7 +50,12 @@ inline HWND CreateHiddenSwapchainWindow()
+             throw std::runtime_error("RegisterClassExW failed");
+     }
+ 
+-    g_hiddenSwapchainWindow = CreateWindowExW(WS_EX_TOOLWINDOW, kHiddenSwapchainWindowClass, L"", WS_POPUP, 0, 0, 1, 1,
++    // ReShade creates a runtime for this bootstrap swapchain before the real
++    // Frostbite swapchain exists. A 1x1 client makes its empty-texture setup
++    // fail with DXGI_ERROR_DRIVER_INTERNAL_ERROR, which prevents it from ever
++    // observing the real swapchain. Keep the host hidden, but give the
++    // bootstrap swapchain a small non-degenerate client area.
++    g_hiddenSwapchainWindow = CreateWindowExW(WS_EX_TOOLWINDOW, kHiddenSwapchainWindowClass, L"", WS_POPUP, 0, 0, 64, 64,
+                                               nullptr, nullptr, wc.hInstance, nullptr);
+ 
+     if (g_hiddenSwapchainWindow == nullptr)

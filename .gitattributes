@@ -1,0 +1,10 @@
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.md text eol=lf
+*.patch -text
+*.dll binary
+*.asi binary
+*.addon64 binary

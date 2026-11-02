@@ -1,0 +1,20 @@
+{
+  "optiscaler": {
+    "commit": "941ce6a1c12f16fec5dfec2898a027fdce06dd2c",
+    "repository": "https://github.com/optiscaler/OptiScaler"
+  },
+  "aio": {
+    "commit": "5947a3d123f922cba0eb7de213e9f4cfe1989236",
+    "repository": "https://github.com/kibblerz/DLSS5-Reshade-AIO"
+  },
+  "feeder": {
+    "commit": "75754b2278914d4b4bfb0accc4fd3d6333369b42",
+    "repository": "https://github.com/jlrouzies-fr/DLSS5-Feeder"
+  },
+  "mfg": {
+    "license": "MIT",
+    "version": "1.7.0",
+    "sourceSha256": "See SHA256SUMS.txt",
+    "includedSource": "src/mfg"
+  }
+}

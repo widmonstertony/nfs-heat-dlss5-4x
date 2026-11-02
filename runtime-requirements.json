@@ -1,0 +1,26 @@
+[
+  {
+    "name": "ReShade64.dll",
+    "sha256": "0CEE63F9C9F13F3AC909C5B4903F4DBB4B719A7AB3B4F13B0DEAF83C814B94F7",
+    "bytes": 5592064,
+    "fileVersion": "6.8.0.2155"
+  },
+  {
+    "name": "nvngx_dlss.dll",
+    "sha256": "858CCFF96360C3098DB9264CD6F13D04A027E09B6CE7AD5BBC297570E824B4F2",
+    "bytes": 74187376,
+    "fileVersion": "310,9,16,0"
+  },
+  {
+    "name": "nvngx_dlssnr.dll",
+    "sha256": "CDFA6C1EC784867182164C7836F324F087B5C9F374D0C9FE46F54999FEABF3ED",
+    "bytes": 276162560,
+    "fileVersion": "310,9,16,0"
+  },
+  {
+    "name": "nvngx_dlssg_standalone.dll",
+    "sha256": "CADEE1AA6DB3907BABDC3285DA2AEBC4553D92B89C38BA3EAE8ABD8BBA1BEA72",
+    "bytes": 7506544,
+    "fileVersion": "310,9,16,0"
+  }
+]
