@@ -2,6 +2,17 @@
 
 This distribution is an aggregate of independently licensed components. No license here relicenses NVIDIA runtimes, game code or models.
 
+Project concept, requested Heat rendering pipeline and integration direction:
+Xinpei Tan / @widmonstertony. This acknowledgment concerns the project proposal
+and integration requirements, not authorship of the underlying SDKs or models.
+
+The earlier MIT-licensed Heat temporal FSR/XeFG bridge by widmonstertony is
+included under `variants/fsr-xefg`, based on published commit
+`63784d89717ca0c7ddbd4204c3cb72cea7a946a9`. Its original licenses and notices
+are retained. Only its installer/template activation route is adjusted here;
+the original bridge binary remains unchanged and hash-pinned. Its Intel and
+AMD runtime dependencies are separately supplied and are not included.
+
 | Component | Origin / notices | License |
 | --- | --- | --- |
 | AIO add-on + caller bridge | kibblerz, DLSS5 ReShade AIO; pinned source and modifications in `src/aio`; see `NOTICE` | Apache-2.0 |

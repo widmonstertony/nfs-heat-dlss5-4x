@@ -11,6 +11,12 @@
     "commit": "75754b2278914d4b4bfb0accc4fd3d6333369b42",
     "repository": "https://github.com/jlrouzies-fr/DLSS5-Feeder"
   },
+  "heatFsrXeFg": {
+    "repository": "https://github.com/widmonstertony/nfs-heat-fsr4-xefg",
+    "commit": "63784d89717ca0c7ddbd4204c3cb72cea7a946a9",
+    "includedSource": "variants/fsr-xefg",
+    "changes": "Installer/template InitializeASI activation, collection documentation; original compiled bridge unchanged"
+  },
   "mfg": {
     "license": "MIT",
     "version": "1.7.0",

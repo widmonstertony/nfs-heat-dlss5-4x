@@ -1,8 +1,19 @@
-# 极品飞车 Heat：DLSS5 电影 2-pass + 实验性 4× 插帧
+# 极品飞车 Heat 画面 Mod：DLSS5/MFG 与 FSR/XeFG 双方案
 
 [English](README.md) · [下载预发布安装包](https://github.com/widmonstertony/nfs-heat-dlss5-4x/releases) · [处理原理](docs/PIPELINE.md)
 
 这是给 **Need for Speed Heat / 极品飞车：热度** 使用的非官方画面 Mod：整合社区 DLSS5 ReShade AIO 神经渲染、DLSS 超分辨率和 RTX 4090 Laptop 上的实验性 DLSS-G 4× 插帧，并加入 Heat 专用的加载、运行库和调度修复。Heat 本身没有这些原生功能。
+
+**项目构想与整合方向：Xinpei Tan / [@widmonstertony](https://github.com/widmonstertony)。** Heat 的超分/插帧整合，以及“电影 NR 放在超分前并执行两次”的处理要求，由 Xinpei 提出并推动。这里署名的是项目想法和整合要求；FSR、XeFG、DLSS 及社区框架仍归各自原作者，许可证与致谢继续保留。
+
+## 两套方案，选择其一
+
+| 方案 | 超分 / 神经处理 | 插帧 | 安装入口 |
+| --- | --- | --- | --- |
+| DLSS5 / DLSS-G | 捕获画面 → 电影 NR 2-pass → DLSS SR | 实验性私有 DLSS-G 4× | 根目录 `INSTALL.cmd` |
+| FSR / XeFG | 截取游戏 TAA 输入 → FSR 3.1 或另备的 FSR4 运行库 | Intel XeFG | `variants/fsr-xefg/INSTALL.cmd` |
+
+你之前提出并发布的 [Heat FSR/XeFG 项目](https://github.com/widmonstertony/nfs-heat-fsr4-xefg) 已连同源码、编译桥、安装器、原许可和中英说明收录至 [`variants/fsr-xefg`](variants/fsr-xefg)。使用要求和切换步骤见[方案说明](docs/EDITIONS.md)。**两套方案一次只安装一个。** FSR 版不包含电影 NR，也不能沿用 NVIDIA 版的 4× 结论；此前验证平台是 Radeon Pro 5600M，本次没有在当前笔记本上重新跑分。
 
 **实验性预发布，参考平台为 Windows x64 + RTX 40 系。** 安装包不包含 NVIDIA 专有运行库，使用者必须自行取得 `runtime-requirements.json` 指定的兼容文件。仅下载源码无法自动获得这些文件。本项目不保证所有道路、显卡和版本都无残影或达到 120 FPS。
 
@@ -41,7 +52,7 @@ Heat 渲染 3D 并绘制游戏 HUD，得到捕获画面
 
 ## 安装
 
-1. 完全退出 Heat。到 Releases 下载 **`Heat-DLSS5-4x-v0.1.0-experimental-kit.zip`** 并解压。
+1. 完全退出 Heat。到 Releases 下载 **`Heat-Graphics-v0.1.1-experimental-kit.zip`** 并解压。以下步骤针对根目录 DLSS5 版，FSR/XeFG 使用上方独立安装入口。
 2. 自行取得适用授权下的 NVIDIA NR、SR、FG 运行库和支持 add-on 的 ReShade，放入自己的运行库文件夹。安装器会核对已测试的 SHA-256，不能随便混用其他版本。FG 文件可以叫 `nvngx_dlssg.dll`，哈希正确时会复制成私有名称。来源及版本见 [DEPENDENCIES.md](docs/DEPENDENCIES.md)。
 3. 双击 `INSTALL.cmd`，填写包含 `NeedForSpeedHeat.exe` 的游戏目录和运行库目录。若游戏目录权限不足，使用管理员运行。
 4. 游戏内按参考配置选择 3840×2400、50% 渲染比例、关闭垂直同步，进入 **Solo / 单人** 测试。安装不改桌面刷新率、NVIDIA 全局设置或系统 NGX OTA。

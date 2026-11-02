@@ -39,7 +39,7 @@ Write-Host 'Profile: Movie / Model 3, NR 2-pass, 1920x1200 -> 3840x2400, experim
 if ($ValidateOnly) { Write-Host 'Validation only: no game files changed.'; return }
 $backup = Join-Path $GameDir ('_HeatDLSS5Backups\'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
 [IO.Directory]::CreateDirectory($backup) | Out-Null
-$record = [ordered]@{Version='0.1.0-experimental';GameDir=$GameDir;Backup=$backup;Status='installing';Files=@();Profile=$null;Suspended=@()}
+$record = [ordered]@{Version='0.1.1-experimental';GameDir=$GameDir;Backup=$backup;Status='installing';Files=@();Profile=$null;Suspended=@()}
 Write-Json $statePath $record
 try {
     # Suspend other graphics add-ons to avoid two neural/FG providers owning the same frame.

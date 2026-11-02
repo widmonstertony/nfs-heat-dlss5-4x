@@ -1,8 +1,19 @@
-# NFS Heat — DLSS5 Movie 2-pass + experimental 4× MFG
+# NFS Heat graphics mods — DLSS5/MFG and FSR/XeFG
 
 [简体中文](README.zh-CN.md) · [Download prerelease](https://github.com/widmonstertony/nfs-heat-dlss5-4x/releases) · [How it works](docs/PIPELINE.md)
 
 An unofficial **Need for Speed Heat** graphics mod integrating the community DLSS5 ReShade AIO neural-rendering pipeline, DLSS Super Resolution and experimental 4× DLSS-G on an RTX 4090 Laptop. It adds features Heat does not expose natively, with Heat-specific loader, provider and scheduling fixes.
+
+**Project concept and integration direction: Xinpei Tan / [@widmonstertony](https://github.com/widmonstertony).** Xinpei proposed and drove the Heat upscaling/frame-generation integration and the requested “Movie NR before SR, two NR passes” path. This credits the project idea and integration requirements; the underlying FSR, XeFG, DLSS and community frameworks retain their authorship and licenses.
+
+## Choose one edition
+
+| Edition | Upscaling / neural processing | Frame generation | Entry point |
+| --- | --- | --- | --- |
+| DLSS5 / DLSS-G | Captured image → Movie NR 2-pass → DLSS SR | Experimental 4× private DLSS-G | Root `INSTALL.cmd` |
+| FSR / XeFG | Game TAA interception → FSR 3.1 or the separately supplied FSR4 runtime | Intel XeFG | `variants/fsr-xefg/INSTALL.cmd` |
+
+The earlier [FSR/XeFG Heat project](https://github.com/widmonstertony/nfs-heat-fsr4-xefg) is now included with its source, compiled bridge, installer, original notices and bilingual documentation under [`variants/fsr-xefg`](variants/fsr-xefg). See [the edition guide](docs/EDITIONS.md) for requirements and switching. **Install one edition at a time.** The FSR edition has no Movie NR and does not inherit the NVIDIA edition's 4× result. Its earlier validation was on Radeon Pro 5600M; it has not been re-benchmarked on the current laptop.
 
 **Experimental prerelease — Windows x64, RTX 40-series reference path.** The release is a mod kit, not a self-contained NVIDIA runtime distribution. You must separately obtain the exact compatible runtime files listed in `runtime-requirements.json`. Source archives alone cannot supply those files. There is no guarantee of zero ghosting or 120 FPS on every road, GPU or game version.
 
@@ -41,7 +52,7 @@ Limitations still needing road testing include moving-car and wheel trails, HUD 
 
 ## Install
 
-1. Exit Heat completely. Download the **`Heat-DLSS5-4x-v0.1.0-experimental-kit.zip`** asset from Releases and extract it.
+1. Exit Heat completely. Download **`Heat-Graphics-v0.1.1-experimental-kit.zip`** from Releases and extract it. The following steps describe the root DLSS5 edition; FSR/XeFG uses its separate installer above.
 2. Obtain the separately licensed NVIDIA NR, SR and FG runtimes plus add-on-enabled ReShade. Put them in your own runtime folder. The installer checks the tested SHA-256 hashes; an arbitrary newer DLL is not interchangeable. `nvngx_dlssg.dll` may be supplied instead of `nvngx_dlssg_standalone.dll` if its hash matches. Runtime links and requirements are in [DEPENDENCIES.md](docs/DEPENDENCIES.md).
 3. Run `INSTALL.cmd`. Enter the folder containing `NeedForSpeedHeat.exe` and your runtime folder. If Windows denies access to the selected game directory, rerun as administrator.
 4. In Heat select 3840×2400 output, 50% render scale and VSync off for the reference profile. Use **Solo** for testing. The mod does not change your desktop refresh rate, global NVIDIA settings or global NGX OTA policy.

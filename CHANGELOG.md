@@ -1,3 +1,15 @@
+# 0.1.1-experimental
+
+Includes the earlier Heat FSR3.1/FSR4 + Intel XeFG edition, its published source,
+original bridge binary, installer and bilingual documentation. Both editions
+are packaged separately within the kit and must not run together. Credits now
+explicitly identify Xinpei Tan / @widmonstertony as the originator of the Heat
+project concept and integration direction, preserving all upstream attribution.
+
+FSR installer activation now asks OptiScaler to call InitializeASI; the bridge
+binary and its reference hardware/runtime requirements are unchanged. This is
+a packaging/activation update, not a new in-game performance certification.
+
 # 0.1.0-experimental
 
 First public Heat integration of Movie NR 2-pass, 1920×1200 working input,

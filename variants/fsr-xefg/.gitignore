@@ -1,0 +1,11 @@
+# The original MIT bridge and ASI loader are included in this collection.
+/dist/
+/build/
+/runtime/
+*.obj
+*.lib
+*.exp
+*.pdb
+*.log
+*.backup
+active-install.json
