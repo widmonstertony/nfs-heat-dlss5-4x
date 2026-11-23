@@ -21,7 +21,7 @@
   },
   {
     "path": "standalone-dlssnr.addon64",
-    "sha256": "7DD9CC4EBF2DB9DED4547F2FB151A4996BDBF8368634D954DB25DA709233B70C"
+    "sha256": "E4186713B09A247B04498C1CBB6AE12B2C128F6D61D144EC740C7280FAD316AB"
   },
   {
     "path": "reshade-shaders/Shaders/DLSS5_AIO_Feed.fx",

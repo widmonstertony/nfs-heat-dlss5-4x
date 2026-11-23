@@ -795,6 +795,7 @@ enum PresentationFrameSlotState : unsigned int
     PresentationSlotReady = 2,
     PresentationSlotPresentRecording = 3,
     PresentationSlotPresenting = 4,
+    PresentationSlotRetiring = 5,
 };
 struct PresentationFrameSlot
 {
@@ -2516,20 +2517,25 @@ static void ReclaimPresentationFrameSlots()
     bool reclaimed = false;
     for (PresentationFrameSlot &slot : g_presentation_slots)
     {
-        unsigned int state = slot.state.load(std::memory_order_acquire);
+        unsigned int state = PresentationSlotPresenting;
+        if (!slot.state.compare_exchange_strong(state, PresentationSlotRetiring,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            continue;
+
         const bool fg_complete = slot.fg_fence_value == 0 || !g_async_fg_fence ||
             g_async_fg_fence->GetCompletedValue() >= slot.fg_fence_value;
-        if (state == PresentationSlotPresenting && completed >= slot.fence_value && fg_complete &&
-            slot.state.compare_exchange_strong(state, PresentationSlotFree,
-                std::memory_order_acq_rel, std::memory_order_acquire))
+        if (completed >= slot.fence_value && fg_complete)
         {
             ConsumeAsyncFgTelemetry(slot);
             slot.fence_value = 0;
             slot.neural_fence_value = 0;
             slot.fg_fence_value = 0;
             slot.fg_telemetry_pending = false;
+            slot.state.store(PresentationSlotFree, std::memory_order_release);
             reclaimed = true;
         }
+        else
+            slot.state.store(PresentationSlotPresenting, std::memory_order_release);
     }
     if (reclaimed && g_neural_dispatch_wake_event)
         SetEvent(g_neural_dispatch_wake_event);
@@ -9588,9 +9594,8 @@ static bool WaitForExplicitProxyPacing()
     const LONGLONG remaining_qpc = g_proxy_next_present_qpc - now.QuadPart;
     if (remaining_qpc <= 0)
     {
-        // Never attempt to recover a missed deadline by submitting multiple
-        // frames back-to-back. The accepted Present below reanchors the next
-        // deadline to one complete refresh interval in the future.
+        // Count a miss only when the delay exceeds the normal pacing
+        // tolerance. RecordAcceptedProxyPresent will reanchor after a miss.
         if (-remaining_qpc > g_proxy_pacing_interval_qpc / 4)
             ++g_proxy_pacing_late_frames;
         return true;
@@ -9646,7 +9651,16 @@ static void RecordAcceptedProxyPresent(bool generated)
     g_proxy_last_accepted_present_qpc = now;
     g_proxy_last_accepted_was_generated = generated;
     if (g_proxy_explicit_pacing_active && g_proxy_pacing_interval_qpc > 0)
-        g_proxy_next_present_qpc = now.QuadPart + g_proxy_pacing_interval_qpc;
+    {
+        const LONGLONG lateness = now.QuadPart - g_proxy_next_present_qpc;
+        // Timer wake and Present overhead must not accumulate once per
+        // generated frame. Keep phase for small overruns, then start a new
+        // interval after a larger stall instead of sending catch-up frames.
+        const bool keep_phase = g_proxy_next_present_qpc > 0 && lateness >= 0 &&
+            lateness <= g_proxy_pacing_interval_qpc / 4;
+        g_proxy_next_present_qpc = (keep_phase ? g_proxy_next_present_qpc :
+            now.QuadPart) + g_proxy_pacing_interval_qpc;
+    }
 }
 
 static unsigned int CounterDeltaMicroseconds(const LARGE_INTEGER &begin, const LARGE_INTEGER &end)
@@ -10600,6 +10614,47 @@ static int AcquireProxyCommandSlot()
     return -1;
 }
 
+static int WaitForBusyProxyCommandSlot()
+{
+    if (!g_proxy_fence || !g_proxy_fence_event || !g_proxy_present_stop_event ||
+        g_proxy_transition_hold.load(std::memory_order_acquire))
+        return -1;
+
+    const UINT64 oldest = *std::min_element(g_proxy_command_fence_values,
+        g_proxy_command_fence_values + kProxyCommandSlotCount);
+    if (oldest == 0 || g_proxy_fence->GetCompletedValue() >= oldest)
+        return AcquireProxyCommandSlot();
+
+    LARGE_INTEGER begin = {}, end = {};
+    QueryPerformanceCounter(&begin);
+    ResetEvent(g_proxy_fence_event);
+    if (FAILED(g_proxy_fence->SetEventOnCompletion(oldest, g_proxy_fence_event)))
+        return -1;
+
+    // A transient full ring needs a short wait for the oldest GPU draw, not
+    // another queued draw or a dropped 4x batch. This runs on the proxy worker.
+    constexpr DWORD kCommandSlotWaitMs = 5;
+    const HANDLE waits[] = {g_proxy_present_stop_event, g_proxy_fence_event};
+    const DWORD result = WaitForMultipleObjects(2, waits, FALSE, kCommandSlotWaitMs);
+    QueryPerformanceCounter(&end);
+    const unsigned int waited = CounterDeltaMicroseconds(begin, end);
+    SmoothMicroseconds(g_cpu_proxy_fence_wait_us, waited);
+    if (result == WAIT_OBJECT_0 || result == WAIT_FAILED ||
+        g_proxy_transition_hold.load(std::memory_order_acquire))
+        return -1;
+
+    const int slot = AcquireProxyCommandSlot();
+    if (slot >= 0)
+    {
+        static unsigned long long recoveries = 0;
+        ++recoveries;
+        if (recoveries <= 8 || recoveries % 120 == 0)
+            Log("proxy command slot recovered after %.3fms GPU wait (count=%llu)",
+                waited / 1000.0f, recoveries);
+    }
+    return slot;
+}
+
 static int StagePipelineFrameForPresentation(UINT pipeline_slot_index)
 {
     if (pipeline_slot_index >= kPipelineFrameSlotCount || !g_proxy_fence || !g_command_queue)
@@ -10812,9 +10867,15 @@ static bool PresentProxySourcesOnWorker(ID3D12Resource *real_source,
     for (UINT present_index = 0; present_index < present_count; ++present_index)
     {
         const bool explicit_pacing = use_framegen && g_proxy_explicit_pacing_active;
+        int command_slot_index = AcquireProxyCommandSlot();
+        if (command_slot_index < 0 && explicit_pacing && !g_synchronous_proxy_presentation)
+            command_slot_index = WaitForBusyProxyCommandSlot();
         if (explicit_pacing && !WaitForExplicitProxyPacing())
             return false;
-        const int command_slot_index = AcquireProxyCommandSlot();
+        if (g_proxy_transition_hold.load(std::memory_order_acquire))
+            return false;
+        if (command_slot_index < 0)
+            command_slot_index = AcquireProxyCommandSlot();
         if (command_slot_index < 0)
         {
             const unsigned long long timeouts = ++g_proxy_present_timeouts;
@@ -11414,9 +11475,26 @@ static DWORD WINAPI NeuralDispatchThread(void *)
     Log("completion-driven D3D11 neural dispatcher started");
     while (true)
     {
-        const DWORD wait = WaitForMultipleObjects(5, waits, FALSE, INFINITE);
+        // A queued capture only signals once. If that signal arrives while all
+        // output slots are still busy, no further capture can enter the mailbox
+        // and the present worker may already be asleep. Recheck pending work
+        // without blocking the game thread or spinning while the mailbox is idle.
+        DWORD timeout = INFINITE;
+        if (g_capture_mailbox_was_enabled.load(std::memory_order_acquire))
+        {
+            for (const LegacyCaptureSlot &slot : g_legacy_capture_slots)
+            {
+                if (slot.state.load(std::memory_order_acquire) == LegacyCaptureSlotQueued)
+                {
+                    timeout = 16;
+                    break;
+                }
+            }
+        }
+        const DWORD wait = WaitForMultipleObjects(5, waits, FALSE, timeout);
         if (wait == WAIT_OBJECT_0) break;
-        if (wait < WAIT_OBJECT_0 + 1 || wait > WAIT_OBJECT_0 + 4) continue;
+        if (wait != WAIT_TIMEOUT &&
+            (wait < WAIT_OBJECT_0 + 1 || wait > WAIT_OBJECT_0 + 4)) continue;
         if (wait == WAIT_OBJECT_0 + 3)
         {
             LARGE_INTEGER completed = {};

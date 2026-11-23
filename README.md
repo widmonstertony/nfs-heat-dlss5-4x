@@ -44,15 +44,13 @@ The 1920×1200 neural input is a downsample of the captured output; it is not pr
 
 ## Evidence and current limits
 
-Reference setup: Steam Heat executable `1.0.60.7040`, RTX 4090 Laptop 16 GB, Windows 11, driver `621.1`, 3840×2400 / 120 Hz display, ReShade `6.8.0.2155`, local NVIDIA providers `310.9.16.0`.
+On the RTX 4090 Laptop reference system, a three-minute drive with v0.1.2 recorded **zero new 4× output timeouts**, compared with 15 in the earlier drive. The add-on sampled 110–122 FPS from the 4× presenter (median 118). The game source stayed at 30 FPS. Logs confirmed both Movie NR passes and DLSS SR at 3840×2400 output during the drive.
 
-The local session logs confirmed successful creation/evaluation of both NR passes, SR and FG, an active 4× presenter, and a 30-real-FPS governor target for the 120 Hz display. **Title/menu output telemetry was approximately 96–110 FPS** after warmup; these are not driving benchmark results. Neural reconstruction GPU time decreased from roughly 20 ms under uncapped source pressure to 12–14 ms after the governor activated.
-
-Limitations still needing road testing include moving-car and wheel trails, HUD ghosting, grey/color shifts, focus changes, long-session stability and latency. Telemetry still showed variable frame intervals, occasional spikes and substantial queue latency (tens to over 100 ms in some samples). High output FPS does not mean low input latency. This release does not claim all of those problems are fixed. See [VALIDATION.md](docs/VALIDATION.md).
+The road telemetry samples the add-on's presenter. Per-frame display timing and input latency were outside the scope of this run. Source-frame intervals still varied. The run focused on the recurring output stalls; see the exact setup, counters and remaining limits in [VALIDATION.md](docs/VALIDATION.md).
 
 ## Install
 
-1. Exit Heat completely. Download **`Heat-Graphics-v0.1.1-experimental-kit.zip`** from Releases and extract it. The following steps describe the root DLSS5 edition; FSR/XeFG uses its separate installer above.
+1. Exit Heat completely. Download **`Heat-Graphics-v0.1.2-experimental-kit.zip`** from Releases and extract it. The following steps describe the root DLSS5 edition. FSR/XeFG uses its separate installer above.
 2. Obtain the separately licensed NVIDIA NR, SR and FG runtimes plus add-on-enabled ReShade. Put them in your own runtime folder. The installer checks the tested SHA-256 hashes; an arbitrary newer DLL is not interchangeable. `nvngx_dlssg.dll` may be supplied instead of `nvngx_dlssg_standalone.dll` if its hash matches. Runtime links and requirements are in [DEPENDENCIES.md](docs/DEPENDENCIES.md).
 3. Run `INSTALL.cmd`. Enter the folder containing `NeedForSpeedHeat.exe` and your runtime folder. If Windows denies access to the selected game directory, rerun as administrator.
 4. In Heat select 3840×2400 output, 50% render scale and VSync off for the reference profile. Use **Solo** for testing. The mod does not change your desktop refresh rate, global NVIDIA settings or global NGX OTA policy.

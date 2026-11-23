@@ -2,8 +2,8 @@ $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $release=Join-Path $repo 'release'
 [IO.Directory]::CreateDirectory($release) | Out-Null
-$kit=Join-Path $release 'Heat-Graphics-v0.1.1-experimental-kit.zip'
-$source=Join-Path $release 'Heat-Graphics-v0.1.1-experimental-source.zip'
+$kit=Join-Path $release 'Heat-Graphics-v0.1.2-experimental-kit.zip'
+$source=Join-Path $release 'Heat-Graphics-v0.1.2-experimental-source.zip'
 $exclude=@('.git','release','build')
 $inputs=Get-ChildItem -LiteralPath $repo -Force | Where-Object { $_.Name -notin $exclude -and $_.Name -ne 'SHA256SUMS.txt' }
 $utf8=New-Object System.Text.UTF8Encoding($false)

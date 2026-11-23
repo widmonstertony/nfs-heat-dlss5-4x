@@ -1,3 +1,13 @@
+# 0.1.2-experimental
+
+Heat's presenter keeps its refresh phase through small scheduling delays. When
+the GPU has not released any output command slots, the presenter makes a short,
+interruptible wait before giving up. The capture worker also retries pending
+work when an output slot becomes available after its last wake signal.
+
+修正 Heat 输出计时累积误差。输出缓冲临时用满时，显示线程会短暂等待 GPU
+释放可用槽位。捕获线程会重查尚未处理的帧，避免在缓冲腾空后继续停帧。
+
 # 0.1.1-experimental
 
 Includes the earlier Heat FSR3.1/FSR4 + Intel XeFG edition, its published source,
